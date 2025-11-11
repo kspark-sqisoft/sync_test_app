@@ -1,0 +1,430 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:video_player/video_player.dart';
+
+class _NextMediaIntent extends Intent {
+  const _NextMediaIntent();
+}
+
+class _PreviousMediaIntent extends Intent {
+  const _PreviousMediaIntent();
+}
+
+class MediaPlayer extends StatefulWidget {
+  const MediaPlayer({
+    super.key,
+    required this.mediaList,
+    this.imageDisplayDuration = const Duration(seconds: 10),
+  });
+
+  final List<String> mediaList;
+  final Duration imageDisplayDuration;
+
+  @override
+  State<MediaPlayer> createState() => _MediaPlayerState();
+}
+
+class _MediaPlayerState extends State<MediaPlayer> {
+  int _currentIndex = 0;
+  String? _currentMedia;
+  VideoPlayerController? _videoController;
+  Timer? _imageTimer;
+  Timer? _progressTimer;
+  bool _advancing = false;
+  late final FocusNode _focusNode;
+  Duration _currentPosition = Duration.zero;
+  Duration _currentDuration = Duration.zero;
+
+  bool get _hasMedia => widget.mediaList.isNotEmpty;
+  bool get _isCurrentVideo =>
+      _currentMedia != null && _isVideoPath(_currentMedia!);
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+    if (_hasMedia) {
+      _playMedia(0);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _focusNode.requestFocus();
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant MediaPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!listEquals(oldWidget.mediaList, widget.mediaList) && _hasMedia) {
+      _playMedia(0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposeVideoController();
+    _imageTimer?.cancel();
+    _progressTimer?.cancel();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _playMedia(int index) {
+    if (!_hasMedia || !mounted) return;
+
+    _imageTimer?.cancel();
+    _progressTimer?.cancel();
+    _disposeVideoController();
+
+    final mediaPath = widget.mediaList[index];
+    final isVideo = _isVideoPath(mediaPath);
+
+    setState(() {
+      _currentIndex = index;
+      _currentMedia = mediaPath;
+      _advancing = false;
+      _currentPosition = Duration.zero;
+      _currentDuration = isVideo ? Duration.zero : widget.imageDisplayDuration;
+    });
+
+    if (isVideo) {
+      _initializeAndPlayVideo(mediaPath);
+    } else {
+      _startImageProgress(Duration.zero);
+      _imageTimer = Timer(widget.imageDisplayDuration, _playNext);
+    }
+  }
+
+  void _initializeAndPlayVideo(String assetPath) {
+    final controller = VideoPlayerController.asset(assetPath);
+    _videoController = controller;
+
+    controller
+        .initialize()
+        .then((_) {
+          if (!mounted || _videoController != controller) {
+            controller.dispose();
+            if (identical(_videoController, controller)) {
+              _videoController = null;
+            }
+            return;
+          }
+          setState(() {
+            _currentDuration = controller.value.duration;
+            _currentPosition = controller.value.position;
+          });
+          controller
+            ..setLooping(false)
+            ..play();
+          controller.addListener(_onVideoTick);
+        })
+        .catchError((error) {
+          debugPrint('Failed to load video asset $assetPath: $error');
+          if (identical(_videoController, controller)) {
+            _videoController = null;
+          }
+          controller.dispose();
+          if (mounted) {
+            _playNext();
+          }
+        });
+  }
+
+  void _onVideoTick() {
+    final controller = _videoController;
+    if (controller == null || !controller.value.isInitialized) return;
+
+    final value = controller.value;
+    if (value.isCompleted && !_advancing) {
+      _advancing = true;
+      _playNext();
+    }
+
+    final position = value.position;
+    final duration = value.duration;
+    if (position != _currentPosition || duration != _currentDuration) {
+      setState(() {
+        _currentPosition = position;
+        _currentDuration = duration;
+      });
+    }
+  }
+
+  void _playNext() {
+    if (!_hasMedia || !mounted) return;
+    final nextIndex = (_currentIndex + 1) % widget.mediaList.length;
+    _playMedia(nextIndex);
+  }
+
+  void _playPrevious() {
+    if (!_hasMedia || !mounted) return;
+    final total = widget.mediaList.length;
+    final previousIndex = (_currentIndex - 1 + total) % total;
+    _playMedia(previousIndex);
+  }
+
+  void _disposeVideoController() {
+    final controller = _videoController;
+    if (controller != null) {
+      controller.removeListener(_onVideoTick);
+      controller.dispose();
+      _videoController = null;
+    }
+  }
+
+  void _startImageProgress(Duration startPosition) {
+    _progressTimer?.cancel();
+    setState(() {
+      _currentPosition = startPosition;
+    });
+    if (_currentDuration <= Duration.zero ||
+        _currentPosition >= _currentDuration) {
+      return;
+    }
+    const tick = Duration(milliseconds: 200);
+    _progressTimer = Timer.periodic(tick, (_) {
+      if (!mounted) return;
+      setState(() {
+        _currentPosition += tick;
+        if (_currentPosition >= _currentDuration) {
+          _currentPosition = _currentDuration;
+          _progressTimer?.cancel();
+        }
+      });
+    });
+  }
+
+  void _seekTo(Duration target) {
+    Duration clamped = target;
+    if (clamped < Duration.zero) {
+      clamped = Duration.zero;
+    } else if (_currentDuration > Duration.zero && clamped > _currentDuration) {
+      clamped = _currentDuration;
+    }
+
+    _advancing = false;
+
+    if (_isCurrentVideo) {
+      final controller = _videoController;
+      if (controller == null) return;
+      controller.seekTo(clamped).then((_) {
+        if (!controller.value.isPlaying) {
+          controller.play();
+        }
+      });
+      setState(() {
+        _currentPosition = clamped;
+      });
+    } else {
+      if (_currentDuration <= Duration.zero) return;
+      _imageTimer?.cancel();
+      final remaining = _currentDuration - clamped;
+      if (remaining <= Duration.zero) {
+        setState(() {
+          _currentPosition = _currentDuration;
+        });
+        _progressTimer?.cancel();
+        _playNext();
+        return;
+      }
+      _startImageProgress(clamped);
+      _imageTimer = Timer(remaining, _playNext);
+    }
+  }
+
+  bool _isVideoPath(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.mp4') ||
+        lower.endsWith('.mov') ||
+        lower.endsWith('.m4v') ||
+        lower.endsWith('.webm') ||
+        lower.endsWith('.avi');
+  }
+
+  String? get _currentMediaName {
+    final media = _currentMedia;
+    if (media == null) return null;
+    final normalized = media.replaceAll('\\', '/');
+    final segments = normalized.split('/');
+    if (segments.isEmpty) return media;
+    return segments.last.isEmpty ? media : segments.last;
+  }
+
+  String _formatDuration(Duration duration) {
+    final totalSeconds = duration.inSeconds;
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+      return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+    }
+    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  Widget _buildCurrentMediaView() {
+    if (!_hasMedia) {
+      return const Center(child: Text('재생할 미디어가 없습니다.'));
+    }
+
+    if (_isCurrentVideo) {
+      final controller = _videoController;
+      if (controller == null || !controller.value.isInitialized) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      final size = controller.value.size;
+      return SizedBox.expand(
+        child: FittedBox(
+          fit: BoxFit.cover,
+          clipBehavior: Clip.hardEdge,
+          child: SizedBox(
+            width: size.width,
+            height: size.height,
+            child: VideoPlayer(controller),
+          ),
+        ),
+      );
+    }
+
+    return SizedBox.expand(
+      child: DecoratedBox(
+        decoration: const BoxDecoration(color: Colors.black),
+        child: _currentMedia == null
+            ? const SizedBox.shrink()
+            : Image.asset(_currentMedia!, fit: BoxFit.cover),
+      ),
+    );
+  }
+
+  Widget _buildProgressOverlay(BuildContext context) {
+    if (!_hasMedia) return const SizedBox.shrink();
+
+    final totalMs = _currentDuration.inMilliseconds;
+    final sliderMax = totalMs > 0 ? totalMs.toDouble() : 1.0;
+    final currentMs = _currentPosition.inMilliseconds;
+    final sliderValue = totalMs > 0
+        ? math.min(currentMs.toDouble(), sliderMax)
+        : 0.0;
+
+    final textStyle = Theme.of(
+      context,
+    ).textTheme.labelMedium?.copyWith(color: Colors.white);
+
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        color: Colors.black54,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: Colors.white,
+                inactiveTrackColor: Colors.white24,
+                thumbColor: Colors.white,
+                overlayColor: Colors.white24,
+              ),
+              child: Slider(
+                value: sliderValue,
+                min: 0,
+                max: sliderMax,
+                onChanged: totalMs <= 0
+                    ? null
+                    : (double newValue) {
+                        setState(() {
+                          _currentPosition = Duration(
+                            milliseconds: newValue.round(),
+                          );
+                        });
+                      },
+                onChangeEnd: totalMs <= 0
+                    ? null
+                    : (double newValue) {
+                        _seekTo(Duration(milliseconds: newValue.round()));
+                      },
+              ),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(_formatDuration(_currentPosition), style: textStyle),
+                Text(_formatDuration(_currentDuration), style: textStyle),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoOverlay(BuildContext context) {
+    final mediaName = _currentMediaName;
+    if (mediaName == null) return const SizedBox.shrink();
+    return Positioned(
+      left: 16,
+      top: 16,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Text(
+            mediaName,
+            style: Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(color: Colors.white),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Shortcuts(
+      shortcuts: <LogicalKeySet, Intent>{
+        LogicalKeySet(LogicalKeyboardKey.arrowRight): const _NextMediaIntent(),
+        LogicalKeySet(LogicalKeyboardKey.arrowLeft):
+            const _PreviousMediaIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _NextMediaIntent: CallbackAction<_NextMediaIntent>(
+            onInvoke: (intent) {
+              _playNext();
+              return null;
+            },
+          ),
+          _PreviousMediaIntent: CallbackAction<_PreviousMediaIntent>(
+            onInvoke: (intent) {
+              _playPrevious();
+              return null;
+            },
+          ),
+        },
+        child: Focus(
+          focusNode: _focusNode,
+          autofocus: true,
+          child: Stack(
+            children: [
+              Positioned.fill(child: _buildCurrentMediaView()),
+              _buildInfoOverlay(context),
+              _buildProgressOverlay(context),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

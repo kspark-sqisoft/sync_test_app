@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:sync_test_app/video_view.dart';
+import 'package:sync_test_app/media_player.dart';
 import 'package:video_player_media_kit/video_player_media_kit.dart';
 
 void main() {
@@ -27,6 +27,14 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  final List<String> _mediaList = [
+    'assets/video/video0.mp4',
+    'assets/image/image0.jpg',
+    'assets/video/video1.mp4',
+    'assets/image/image1.jpg',
+    'assets/video/video2.mp4',
+    'assets/image/image2.jpg',
+  ];
   Timer? _startTimer;
   DateTime? _scheduledDateTime;
   bool _showVideo = false;
@@ -35,6 +43,14 @@ class _MyHomePageState extends State<MyHomePage> {
   void dispose() {
     _startTimer?.cancel();
     super.dispose();
+  }
+
+  void _startPlaybackNow() {
+    _startTimer?.cancel();
+    setState(() {
+      _scheduledDateTime = DateTime.now();
+      _showVideo = true;
+    });
   }
 
   Future<void> _pickScheduleTime() async {
@@ -99,10 +115,14 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 300),
         child: _showVideo
-            ? const VideoView()
+            ? MediaPlayer(
+                key: ValueKey(_scheduledDateTime),
+                mediaList: _mediaList,
+              )
             : Center(
                 child: Padding(
                   padding: const EdgeInsets.all(24),
@@ -124,6 +144,12 @@ class _MyHomePageState extends State<MyHomePage> {
                         label: Text(
                           _scheduledDateTime == null ? '재생 시간 지정' : '재생 시간 변경',
                         ),
+                      ),
+                      const SizedBox(height: 12),
+                      ElevatedButton.icon(
+                        onPressed: _startPlaybackNow,
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('바로 재생'),
                       ),
                     ],
                   ),
