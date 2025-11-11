@@ -153,6 +153,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _handleMediaPlayerAction(MediaPlayerEvent event) {
     final payload = event.index.toString();
+    _initialMediaIndex = event.index;
     switch (event.action) {
       case MediaPlayerAction.next:
         unawaited(
@@ -176,7 +177,6 @@ class _MyHomePageState extends State<MyHomePage> {
         );
         break;
     }
-    _initialMediaIndex = event.index;
   }
 
   void _handleRemoteCommand(SyncCommand command) {
