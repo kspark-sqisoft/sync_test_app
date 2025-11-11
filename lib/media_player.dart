@@ -51,6 +51,32 @@ class MediaPlayerController {
   }
 
   int? get currentIndex => _state?._currentIndex;
+
+  int? get currentElapsedMs {
+    final state = _state;
+    if (state == null) return null;
+    if (state._isCurrentVideo) {
+      final controller = state._videoController;
+      if (controller == null || !controller.value.isInitialized) return null;
+      return controller.value.position.inMilliseconds;
+    } else {
+      return state._currentPosition.inMilliseconds;
+    }
+  }
+
+  void adjustPlaybackSpeed(double speed) {
+    final state = _state;
+    if (state == null) return;
+    final controller = state._videoController;
+    if (controller == null || !controller.value.isInitialized) return;
+    controller.setPlaybackSpeed(speed.clamp(0.5, 2.0));
+  }
+
+  void seekToMs(int milliseconds) {
+    final state = _state;
+    if (state == null) return;
+    state._seekTo(Duration(milliseconds: milliseconds));
+  }
 }
 
 class _NextMediaIntent extends Intent {

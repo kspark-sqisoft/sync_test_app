@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sync_test_app/media_player.dart';
 import 'package:sync_test_app/sync_protocol.dart';
 import 'package:sync_test_app/tcp_sync_service.dart';
+import 'package:sync_test_app/udp_sync_service.dart';
 import 'package:video_player_media_kit/video_player_media_kit.dart';
 
 void main() {
@@ -47,15 +48,19 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _showVideo = false;
   AppMode _mode = AppMode.server;
   TcpSyncService? _syncService;
+  UdpSyncService? _udpSyncService;
   final List<SyncCommand> _pendingCommands = [];
   Timer? _pendingCommandTimer;
+  Timer? _udpBroadcastTimer;
   List<String> _localAddresses = const [];
   bool _isClientConnected = false;
   int _initialMediaIndex = 0;
   int _playbackSession = 0;
   StreamSubscription<bool>? _connectionSub;
+  double _currentPlaybackSpeed = 1.0;
 
   static const int _tcpPort = 8989;
+  static const int _udpSyncPort = 45455;
 
   int get _currentMediaIndex =>
       _mediaPlayerController.currentIndex ?? _initialMediaIndex;
@@ -73,8 +78,10 @@ class _MyHomePageState extends State<MyHomePage> {
   void dispose() {
     _startTimer?.cancel();
     unawaited(_syncService?.dispose());
+    _udpSyncService?.dispose();
     _mediaPlayerController.dispose();
     _pendingCommandTimer?.cancel();
+    _udpBroadcastTimer?.cancel();
     _serverAddressController.dispose();
     _connectionSub?.cancel();
     super.dispose();
@@ -91,6 +98,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _initialMediaIndex = startIndex;
     final startTime = referenceTime ?? DateTime.now();
     _playbackSession++;
+    _currentPlaybackSpeed = 1.0;
     setState(() {
       _scheduledDateTime = startTime;
       _showVideo = true;
@@ -107,6 +115,7 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
     _schedulePendingCommandProcessing();
+    _startUdpSyncService();
   }
 
   void _handleMediaPlayerExit() {
@@ -115,6 +124,10 @@ class _MyHomePageState extends State<MyHomePage> {
     _pendingCommandTimer?.cancel();
     _pendingCommandTimer = null;
     _pendingCommands.clear();
+    _udpBroadcastTimer?.cancel();
+    _udpBroadcastTimer = null;
+    _udpSyncService?.stop();
+    _currentPlaybackSpeed = 1.0;
     setState(() {
       _scheduledDateTime = null;
       _showVideo = false;
@@ -509,6 +522,106 @@ class _MyHomePageState extends State<MyHomePage> {
     } catch (error) {
       debugPrint('Failed to parse date time payload: $value ($error)');
       return null;
+    }
+  }
+
+  Future<void> _startUdpSyncService() async {
+    await _udpSyncService?.stop();
+    final service = UdpSyncService(
+      port: _udpSyncPort,
+      isServer: _mode == AppMode.server,
+      onSyncData: _mode == AppMode.client ? _handleSyncData : null,
+    );
+    await service.start();
+    if (!mounted) {
+      service.dispose();
+      return;
+    }
+    _udpSyncService = service;
+
+    if (_mode == AppMode.server) {
+      // 서버: 주기적으로 현재 상태 브로드캐스트
+      _udpBroadcastTimer?.cancel();
+      _udpBroadcastTimer = Timer.periodic(
+        const Duration(milliseconds: 200),
+        (_) => _broadcastUdpSyncData(),
+      );
+    }
+  }
+
+  void _broadcastUdpSyncData() {
+    if (_mode != AppMode.server || !_showVideo) return;
+    final index = _mediaPlayerController.currentIndex;
+    final elapsed = _mediaPlayerController.currentElapsedMs;
+    if (index == null || elapsed == null) return;
+    _udpSyncService?.broadcastSyncData(index, elapsed);
+  }
+
+  void _handleSyncData(MediaSyncData data) {
+    if (_mode != AppMode.client || !_showVideo) return;
+    if (!_mediaPlayerController.isAttached) return;
+
+    final clientIndex = _mediaPlayerController.currentIndex;
+    final clientElapsed = _mediaPlayerController.currentElapsedMs;
+
+    if (clientIndex == null || clientElapsed == null) return;
+
+    // 미디어 인덱스가 다르면 즉시 맞춤
+    if (clientIndex != data.mediaIndex) {
+      debugPrint(
+        '[UdpSync] Index mismatch: client=$clientIndex server=${data.mediaIndex}, jumping',
+      );
+      _mediaPlayerController.playAt(data.mediaIndex, fromRemote: true);
+      return;
+    }
+
+    // 네트워크 지연 보정
+    final clientTime = DateTime.now().millisecondsSinceEpoch;
+    final networkDelay = (clientTime - data.serverTimestampMs) ~/ 2;
+    final serverElapsedAdjusted = data.elapsedMs + networkDelay;
+
+    // 경과 시간 차이 계산
+    final diff = serverElapsedAdjusted - clientElapsed;
+    final absDiff = diff.abs();
+
+    // 큰 차이(500ms 이상)는 즉시 seekTo로 맞춤
+    if (absDiff > 500) {
+      debugPrint(
+        '[UdpSync] Large diff: ${diff}ms, seeking to ${serverElapsedAdjusted}ms',
+      );
+      _mediaPlayerController.seekToMs(serverElapsedAdjusted);
+      _currentPlaybackSpeed = 1.0;
+      return;
+    }
+
+    // 작은 차이(100ms 이상)는 재생 속도 조절
+    if (absDiff > 100) {
+      // 차이를 줄이기 위한 속도 계산
+      // 서버보다 느리면 빠르게 (diff > 0), 빠르면 느리게 (diff < 0)
+      double targetSpeed;
+      if (diff > 0) {
+        // 클라이언트가 느림 -> 빠르게 (최대 1.05x)
+        targetSpeed = 1.0 + (diff / 2000.0).clamp(0.0, 0.05);
+      } else {
+        // 클라이언트가 빠름 -> 느리게 (최소 0.95x)
+        targetSpeed = 1.0 + (diff / 2000.0).clamp(-0.05, 0.0);
+      }
+
+      // 속도 변화가 크면 점진적으로 조절
+      if ((targetSpeed - _currentPlaybackSpeed).abs() > 0.01) {
+        _currentPlaybackSpeed = targetSpeed;
+        _mediaPlayerController.adjustPlaybackSpeed(targetSpeed);
+        debugPrint(
+          '[UdpSync] Adjusting speed: ${targetSpeed.toStringAsFixed(3)}x (diff: ${diff}ms)',
+        );
+      }
+    } else {
+      // 차이가 작으면 정상 속도로 복귀
+      if (_currentPlaybackSpeed != 1.0) {
+        _currentPlaybackSpeed = 1.0;
+        _mediaPlayerController.adjustPlaybackSpeed(1.0);
+        debugPrint('[UdpSync] Resetting speed to 1.0x');
+      }
     }
   }
 
