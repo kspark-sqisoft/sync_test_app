@@ -43,8 +43,10 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _showVideo = false;
   AppMode _mode = AppMode.server;
   UdpSyncService? _udpService;
+  final List<SyncCommand> _pendingCommands = [];
+  Timer? _pendingCommandTimer;
 
-  static const int _udpPort = 45454;
+  static const int _udpPort = 8989;
 
   @override
   void initState() {
@@ -57,6 +59,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _startTimer?.cancel();
     _udpService?.dispose();
     _mediaPlayerController.dispose();
+    _pendingCommandTimer?.cancel();
     super.dispose();
   }
 
@@ -70,11 +73,15 @@ class _MyHomePageState extends State<MyHomePage> {
     if (_mode == AppMode.server && broadcast) {
       _broadcastCommand(SyncCommand.startNow);
     }
+    _schedulePendingCommandProcessing();
   }
 
   void _handleMediaPlayerExit() {
     _startTimer?.cancel();
     _startTimer = null;
+    _pendingCommandTimer?.cancel();
+    _pendingCommandTimer = null;
+    _pendingCommands.clear();
     setState(() {
       _scheduledDateTime = null;
       _showVideo = false;
@@ -123,21 +130,16 @@ class _MyHomePageState extends State<MyHomePage> {
     switch (command) {
       case SyncCommand.startNow:
         _startPlaybackNow(broadcast: false);
+        _schedulePendingCommandProcessing();
         break;
       case SyncCommand.next:
-        if (_showVideo) {
-          _mediaPlayerController.playNext(fromRemote: true);
-        }
+        _handleOrQueueRemoteCommand(command);
         break;
       case SyncCommand.previous:
-        if (_showVideo) {
-          _mediaPlayerController.playPrevious(fromRemote: true);
-        }
+        _handleOrQueueRemoteCommand(command);
         break;
       case SyncCommand.exit:
-        if (_showVideo) {
-          _mediaPlayerController.exit(fromRemote: true);
-        }
+        _handleOrQueueRemoteCommand(command);
         break;
     }
   }
@@ -156,6 +158,63 @@ class _MyHomePageState extends State<MyHomePage> {
       }
     });
     await _restartUdpService();
+  }
+
+  void _handleOrQueueRemoteCommand(SyncCommand command) {
+    if (_canExecuteImmediate(command)) {
+      _executeCommand(command);
+    } else {
+      _pendingCommands.add(command);
+      _schedulePendingCommandProcessing();
+    }
+  }
+
+  bool _canExecuteImmediate(SyncCommand command) {
+    if (!_showVideo) return false;
+    if (!_mediaPlayerController.isAttached) return false;
+    return true;
+  }
+
+  void _schedulePendingCommandProcessing() {
+    if (_pendingCommands.isEmpty) return;
+    _pendingCommandTimer ??= Timer.periodic(const Duration(milliseconds: 100), (
+      timer,
+    ) {
+      if (!mounted) {
+        timer.cancel();
+        _pendingCommandTimer = null;
+        return;
+      }
+      if (_pendingCommands.isEmpty) {
+        timer.cancel();
+        _pendingCommandTimer = null;
+        return;
+      }
+      if (_canExecuteImmediate(_pendingCommands.first)) {
+        final commands = List<SyncCommand>.from(_pendingCommands);
+        _pendingCommands.clear();
+        for (final command in commands) {
+          _executeCommand(command);
+        }
+      }
+    });
+  }
+
+  void _executeCommand(SyncCommand command) {
+    switch (command) {
+      case SyncCommand.startNow:
+        _startPlaybackNow(broadcast: false);
+        break;
+      case SyncCommand.next:
+        _mediaPlayerController.playNext(fromRemote: true);
+        break;
+      case SyncCommand.previous:
+        _mediaPlayerController.playPrevious(fromRemote: true);
+        break;
+      case SyncCommand.exit:
+        _mediaPlayerController.exit(fromRemote: true);
+        break;
+    }
   }
 
   Future<void> _pickScheduleTime() async {
