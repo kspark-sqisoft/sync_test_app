@@ -53,6 +53,14 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  void _handleMediaPlayerExit() {
+    _startTimer?.cancel();
+    setState(() {
+      _scheduledDateTime = null;
+      _showVideo = false;
+    });
+  }
+
   Future<void> _pickScheduleTime() async {
     final picked = await showTimePicker(
       context: context,
@@ -115,13 +123,13 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 300),
         child: _showVideo
             ? MediaPlayer(
                 key: ValueKey(_scheduledDateTime),
                 mediaList: _mediaList,
+                onExit: _handleMediaPlayerExit,
               )
             : Center(
                 child: Padding(

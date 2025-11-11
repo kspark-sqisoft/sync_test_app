@@ -14,15 +14,21 @@ class _PreviousMediaIntent extends Intent {
   const _PreviousMediaIntent();
 }
 
+class _ExitIntent extends Intent {
+  const _ExitIntent();
+}
+
 class MediaPlayer extends StatefulWidget {
   const MediaPlayer({
     super.key,
     required this.mediaList,
     this.imageDisplayDuration = const Duration(seconds: 10),
+    required this.onExit,
   });
 
   final List<String> mediaList;
   final Duration imageDisplayDuration;
+  final VoidCallback onExit;
 
   @override
   State<MediaPlayer> createState() => _MediaPlayerState();
@@ -175,6 +181,16 @@ class _MediaPlayerState extends State<MediaPlayer> {
       controller.dispose();
       _videoController = null;
     }
+  }
+
+  void _handleExit() {
+    _advancing = false;
+    _imageTimer?.cancel();
+    _imageTimer = null;
+    _progressTimer?.cancel();
+    _progressTimer = null;
+    _disposeVideoController();
+    widget.onExit();
   }
 
   void _startImageProgress(Duration startPosition) {
@@ -390,6 +406,26 @@ class _MediaPlayerState extends State<MediaPlayer> {
     );
   }
 
+  Widget _buildTopProgressBar() {
+    if (_currentDuration <= Duration.zero) {
+      return const SizedBox.shrink();
+    }
+    final totalMs = _currentDuration.inMilliseconds;
+    final currentMs = _currentPosition.inMilliseconds;
+    final progress = totalMs > 0 ? (currentMs / totalMs).clamp(0.0, 1.0) : 0.0;
+    return Positioned(
+      top: 0,
+      left: 0,
+      right: 0,
+      child: LinearProgressIndicator(
+        value: progress.isNaN ? 0.0 : progress,
+        minHeight: 4,
+        backgroundColor: Colors.black45,
+        valueColor: const AlwaysStoppedAnimation<Color>(Colors.white70),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Shortcuts(
@@ -397,6 +433,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
         LogicalKeySet(LogicalKeyboardKey.arrowRight): const _NextMediaIntent(),
         LogicalKeySet(LogicalKeyboardKey.arrowLeft):
             const _PreviousMediaIntent(),
+        LogicalKeySet(LogicalKeyboardKey.escape): const _ExitIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -412,6 +449,12 @@ class _MediaPlayerState extends State<MediaPlayer> {
               return null;
             },
           ),
+          _ExitIntent: CallbackAction<_ExitIntent>(
+            onInvoke: (intent) {
+              _handleExit();
+              return null;
+            },
+          ),
         },
         child: Focus(
           focusNode: _focusNode,
@@ -419,6 +462,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
           child: Stack(
             children: [
               Positioned.fill(child: _buildCurrentMediaView()),
+              _buildTopProgressBar(),
               _buildInfoOverlay(context),
               _buildProgressOverlay(context),
             ],
