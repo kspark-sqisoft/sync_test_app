@@ -472,6 +472,10 @@ class _MyHomePageState extends State<MyHomePage> {
     if (payload == null || payload.isEmpty) return (null, null);
     final separator = payload.indexOf(',');
     if (separator == -1) {
+      final time = _parseDateTime(payload);
+      if (time != null) {
+        return (null, time);
+      }
       return (_parseIndex(payload), null);
     }
     final indexPart = payload.substring(0, separator);
