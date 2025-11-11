@@ -132,7 +132,7 @@ class _MyHomePageState extends State<MyHomePage> {
     });
     setState(() {
       _syncService = service;
-      _isClientConnected = _mode == AppMode.server ? true : _isClientConnected;
+      _isClientConnected = _mode == AppMode.server ? true : false;
     });
   }
 
@@ -221,6 +221,17 @@ class _MyHomePageState extends State<MyHomePage> {
       await service.updateServerAddress(address);
     }
     await _restartSyncService();
+  }
+
+  Future<void> _disconnectFromServer() async {
+    if (_mode != AppMode.client) return;
+    _connectionSub?.cancel();
+    _connectionSub = null;
+    await _syncService?.stop();
+    setState(() {
+      _syncService = null;
+      _isClientConnected = false;
+    });
   }
 
   bool _canExecuteImmediate(SyncCommand command) {
@@ -498,9 +509,22 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                         const SizedBox(height: 8),
                         ElevatedButton.icon(
-                          onPressed: _connectToServer,
-                          icon: const Icon(Icons.link),
-                          label: const Text('서버 연결'),
+                          onPressed: _isClientConnected
+                              ? _disconnectFromServer
+                              : _connectToServer,
+                          icon: Icon(
+                            _isClientConnected ? Icons.link_off : Icons.link,
+                          ),
+                          label: Text(_isClientConnected ? '연결 해제' : '서버 연결'),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _isClientConnected
+                              ? '서버와 연결되었습니다.'
+                              : '서버에 연결해야 재생 제어가 동기화됩니다.',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: Colors.grey.shade600),
                         ),
                       ],
                       const SizedBox(height: 24),
