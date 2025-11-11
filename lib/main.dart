@@ -51,9 +51,13 @@ class _MyHomePageState extends State<MyHomePage> {
   Timer? _pendingCommandTimer;
   List<String> _localAddresses = const [];
   bool _isClientConnected = false;
+  int _initialMediaIndex = 0;
   StreamSubscription<bool>? _connectionSub;
 
   static const int _tcpPort = 8989;
+
+  int get _currentMediaIndex =>
+      _mediaPlayerController.currentIndex ?? _initialMediaIndex;
 
   @override
   void initState() {
@@ -75,9 +79,15 @@ class _MyHomePageState extends State<MyHomePage> {
     super.dispose();
   }
 
-  void _startPlaybackNow({bool broadcast = true, DateTime? referenceTime}) {
+  void _startPlaybackNow({
+    bool broadcast = true,
+    DateTime? referenceTime,
+    int? mediaIndex,
+  }) {
     _startTimer?.cancel();
     _startTimer = null;
+    final startIndex = mediaIndex ?? _currentMediaIndex;
+    _initialMediaIndex = startIndex;
     final startTime = referenceTime ?? DateTime.now();
     setState(() {
       _scheduledDateTime = startTime;
@@ -88,7 +98,7 @@ class _MyHomePageState extends State<MyHomePage> {
         _broadcastCommand(
           SyncCommand(
             SyncCommandType.startNow,
-            payload: startTime.toUtc().toIso8601String(),
+            payload: _encodeIndexTime(startIndex, startTime),
           ),
         ),
       );
@@ -166,25 +176,44 @@ class _MyHomePageState extends State<MyHomePage> {
         );
         break;
     }
+    _initialMediaIndex = event.index;
   }
 
   void _handleRemoteCommand(SyncCommand command) {
     if (!mounted) return;
     switch (command.type) {
       case SyncCommandType.startNow:
+        final (index, time) = _decodeIndexTime(command.payload);
+        final startTime = time ?? DateTime.now();
+        if (index != null) {
+          _initialMediaIndex = index;
+        }
         _startPlaybackNow(
           broadcast: false,
-          referenceTime: _parseDateTime(command.payload),
+          referenceTime: startTime,
+          mediaIndex: index,
         );
         _schedulePendingCommandProcessing();
         break;
       case SyncCommandType.next:
+        final nextIndex = _parseIndex(command.payload);
+        if (nextIndex != null) {
+          _initialMediaIndex = nextIndex;
+        }
         _handleOrQueueRemoteCommand(command);
         break;
       case SyncCommandType.previous:
+        final previousIndex = _parseIndex(command.payload);
+        if (previousIndex != null) {
+          _initialMediaIndex = previousIndex;
+        }
         _handleOrQueueRemoteCommand(command);
         break;
       case SyncCommandType.exit:
+        final exitIndex = _parseIndex(command.payload);
+        if (exitIndex != null) {
+          _initialMediaIndex = exitIndex;
+        }
         _handleOrQueueRemoteCommand(command);
         break;
       case SyncCommandType.schedule:
@@ -284,14 +313,21 @@ class _MyHomePageState extends State<MyHomePage> {
   void _executeCommand(SyncCommand command) {
     switch (command.type) {
       case SyncCommandType.startNow:
+        final (index, time) = _decodeIndexTime(command.payload);
+        final startTime = time ?? DateTime.now();
+        if (index != null) {
+          _initialMediaIndex = index;
+        }
         _startPlaybackNow(
           broadcast: false,
-          referenceTime: _parseDateTime(command.payload),
+          referenceTime: startTime,
+          mediaIndex: index,
         );
         break;
       case SyncCommandType.next:
         final index = _parseIndex(command.payload);
         if (index != null) {
+          _initialMediaIndex = index;
           _mediaPlayerController.playAt(index, fromRemote: true);
         } else {
           _mediaPlayerController.playNext(fromRemote: true);
@@ -300,12 +336,17 @@ class _MyHomePageState extends State<MyHomePage> {
       case SyncCommandType.previous:
         final index = _parseIndex(command.payload);
         if (index != null) {
+          _initialMediaIndex = index;
           _mediaPlayerController.playAt(index, fromRemote: true);
         } else {
           _mediaPlayerController.playPrevious(fromRemote: true);
         }
         break;
       case SyncCommandType.exit:
+        final index = _parseIndex(command.payload);
+        if (index != null) {
+          _initialMediaIndex = index;
+        }
         _mediaPlayerController.exit(fromRemote: true);
         break;
       case SyncCommandType.schedule:
@@ -369,6 +410,7 @@ class _MyHomePageState extends State<MyHomePage> {
       scheduled = scheduled.add(const Duration(days: 1));
     }
 
+    _initialMediaIndex = _currentMediaIndex;
     _applySchedule(scheduled, shouldBroadcastOnStart: true);
 
     if (_mode == AppMode.server) {
@@ -376,7 +418,7 @@ class _MyHomePageState extends State<MyHomePage> {
         _broadcastCommand(
           SyncCommand(
             SyncCommandType.schedule,
-            payload: scheduled.toUtc().toIso8601String(),
+            payload: _encodeIndexTime(_initialMediaIndex, scheduled),
           ),
         ),
       );
@@ -394,6 +436,7 @@ class _MyHomePageState extends State<MyHomePage> {
       _startPlaybackNow(
         broadcast: shouldBroadcastOnStart,
         referenceTime: scheduled,
+        mediaIndex: _initialMediaIndex,
       );
     }
 
@@ -415,12 +458,29 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _handleScheduleCommand(String? payload) {
-    final scheduled = _parseDateTime(payload);
+    final (index, scheduled) = _decodeIndexTime(payload);
     if (scheduled == null) {
       return;
     }
+    if (index != null) {
+      _initialMediaIndex = index;
+    }
     _applySchedule(scheduled, shouldBroadcastOnStart: false);
   }
+
+  (int?, DateTime?) _decodeIndexTime(String? payload) {
+    if (payload == null || payload.isEmpty) return (null, null);
+    final separator = payload.indexOf(',');
+    if (separator == -1) {
+      return (_parseIndex(payload), null);
+    }
+    final indexPart = payload.substring(0, separator);
+    final timePart = payload.substring(separator + 1);
+    return (_parseIndex(indexPart), _parseDateTime(timePart));
+  }
+
+  String _encodeIndexTime(int index, DateTime time) =>
+      '$index,${time.toUtc().toIso8601String()}';
 
   int? _parseIndex(String? value) {
     if (value == null || value.isEmpty) return null;
@@ -458,6 +518,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 onAction: _handleMediaPlayerAction,
                 onExit: _handleMediaPlayerExit,
                 autoAdvance: _mode == AppMode.server,
+                initialIndex: _initialMediaIndex,
               )
             : Center(
                 child: Padding(

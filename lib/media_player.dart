@@ -49,6 +49,8 @@ class MediaPlayerController {
   void dispose() {
     _state = null;
   }
+
+  int? get currentIndex => _state?._currentIndex;
 }
 
 class _NextMediaIntent extends Intent {
@@ -72,6 +74,7 @@ class MediaPlayer extends StatefulWidget {
     this.controller,
     this.onAction,
     this.autoAdvance = true,
+    this.initialIndex = 0,
   });
 
   final List<String> mediaList;
@@ -80,6 +83,7 @@ class MediaPlayer extends StatefulWidget {
   final MediaPlayerController? controller;
   final ValueChanged<MediaPlayerEvent>? onAction;
   final bool autoAdvance;
+  final int initialIndex;
 
   @override
   State<MediaPlayer> createState() => _MediaPlayerState();
@@ -101,6 +105,13 @@ class _MediaPlayerState extends State<MediaPlayer> {
   bool get _isCurrentVideo =>
       _currentMedia != null && _isVideoPath(_currentMedia!);
 
+  int _normalizeIndex(int index) {
+    final total = widget.mediaList.length;
+    if (total == 0) return 0;
+    final normalized = ((index % total) + total) % total;
+    return normalized;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -108,7 +119,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
     _controller = widget.controller;
     _controller?._attach(this);
     if (_hasMedia) {
-      _playMedia(0);
+      _playMedia(widget.initialIndex);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -121,12 +132,17 @@ class _MediaPlayerState extends State<MediaPlayer> {
   void didUpdateWidget(covariant MediaPlayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!listEquals(oldWidget.mediaList, widget.mediaList) && _hasMedia) {
-      _playMedia(0);
+      _playMedia(widget.initialIndex);
     }
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller?._detach(this);
       _controller = widget.controller;
       _controller?._attach(this);
+    }
+    if (oldWidget.initialIndex != widget.initialIndex &&
+        widget.initialIndex != _currentIndex &&
+        _hasMedia) {
+      _playMedia(widget.initialIndex);
     }
   }
 
@@ -147,11 +163,12 @@ class _MediaPlayerState extends State<MediaPlayer> {
     _progressTimer?.cancel();
     _disposeVideoController();
 
-    final mediaPath = widget.mediaList[index];
+    final normalized = _normalizeIndex(index);
+    final mediaPath = widget.mediaList[normalized];
     final isVideo = _isVideoPath(mediaPath);
 
     setState(() {
-      _currentIndex = index;
+      _currentIndex = normalized;
       _currentMedia = mediaPath;
       _advancing = false;
       _currentPosition = Duration.zero;
