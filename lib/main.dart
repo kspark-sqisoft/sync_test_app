@@ -207,6 +207,18 @@ class _MyHomePageState extends State<MyHomePage> {
     final payload = event.index.toString();
     debugPrint('[Main] local action ${event.action} index=${event.index}');
     _initialMediaIndex = event.index;
+    if (_mode == AppMode.server && _udpSyncEnabled) {
+      Future.delayed(const Duration(seconds: 1), () {
+        if (!_udpSyncEnabled ||
+            _mode != AppMode.server ||
+            !_showVideo ||
+            !_mediaPlayerController.isAttached ||
+            _mediaPlayerController.currentIndex != event.index) {
+          return;
+        }
+        _broadcastUdpSyncData();
+      });
+    }
     switch (event.action) {
       case MediaPlayerAction.next:
         unawaited(
