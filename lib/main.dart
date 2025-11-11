@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sync_test_app/media_player.dart';
 import 'package:sync_test_app/sync_protocol.dart';
-import 'package:sync_test_app/udp_sync_service.dart';
+import 'package:sync_test_app/tcp_sync_service.dart';
 import 'package:video_player_media_kit/video_player_media_kit.dart';
 
 void main() {
@@ -38,28 +39,36 @@ class _MyHomePageState extends State<MyHomePage> {
     'assets/image/image2.jpg',
   ];
   final MediaPlayerController _mediaPlayerController = MediaPlayerController();
+  final TextEditingController _serverAddressController = TextEditingController(
+    text: '127.0.0.1',
+  );
   Timer? _startTimer;
   DateTime? _scheduledDateTime;
   bool _showVideo = false;
   AppMode _mode = AppMode.server;
-  UdpSyncService? _udpService;
+  TcpSyncService? _syncService;
   final List<SyncCommand> _pendingCommands = [];
   Timer? _pendingCommandTimer;
+  List<String> _localAddresses = const [];
 
-  static const int _udpPort = 8989;
+  static const int _tcpPort = 8989;
 
   @override
   void initState() {
     super.initState();
-    Future.microtask(_restartUdpService);
+    Future.microtask(() async {
+      await _loadLocalAddresses();
+      await _restartSyncService();
+    });
   }
 
   @override
   void dispose() {
     _startTimer?.cancel();
-    _udpService?.dispose();
+    _syncService?.dispose();
     _mediaPlayerController.dispose();
     _pendingCommandTimer?.cancel();
+    _serverAddressController.dispose();
     super.dispose();
   }
 
@@ -88,13 +97,14 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
-  Future<void> _restartUdpService() async {
-    final previous = _udpService;
+  Future<void> _restartSyncService() async {
+    final previous = _syncService;
     await previous?.stop();
-    final service = UdpSyncService(
-      port: _udpPort,
+    final service = TcpSyncService(
+      port: _tcpPort,
       mode: _mode,
       onCommand: _handleRemoteCommand,
+      serverAddress: _serverAddressController.text.trim(),
     );
     await service.start();
     if (!mounted) {
@@ -102,25 +112,25 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
     setState(() {
-      _udpService = service;
+      _syncService = service;
     });
   }
 
-  void _broadcastCommand(SyncCommand command) {
+  Future<void> _broadcastCommand(SyncCommand command) async {
     if (_mode != AppMode.server) return;
-    _udpService?.sendCommand(command);
+    await _syncService?.sendCommand(command);
   }
 
   void _handleMediaPlayerAction(MediaPlayerAction action) {
     switch (action) {
       case MediaPlayerAction.next:
-        _broadcastCommand(SyncCommand.next);
+        unawaited(_broadcastCommand(SyncCommand.next));
         break;
       case MediaPlayerAction.previous:
-        _broadcastCommand(SyncCommand.previous);
+        unawaited(_broadcastCommand(SyncCommand.previous));
         break;
       case MediaPlayerAction.exit:
-        _broadcastCommand(SyncCommand.exit);
+        unawaited(_broadcastCommand(SyncCommand.exit));
         break;
     }
   }
@@ -157,7 +167,10 @@ class _MyHomePageState extends State<MyHomePage> {
         _scheduledDateTime = null;
       }
     });
-    await _restartUdpService();
+    if (mode == AppMode.server) {
+      await _loadLocalAddresses();
+    }
+    await _restartSyncService();
   }
 
   void _handleOrQueueRemoteCommand(SyncCommand command) {
@@ -166,6 +179,18 @@ class _MyHomePageState extends State<MyHomePage> {
     } else {
       _pendingCommands.add(command);
       _schedulePendingCommandProcessing();
+    }
+  }
+
+  Future<void> _connectToServer() async {
+    if (_mode != AppMode.client) return;
+    final address = _serverAddressController.text.trim();
+    if (address.isEmpty) return;
+    final service = _syncService;
+    if (service == null) {
+      await _restartSyncService();
+    } else {
+      await service.updateServerAddress(address);
     }
   }
 
@@ -190,14 +215,19 @@ class _MyHomePageState extends State<MyHomePage> {
         _pendingCommandTimer = null;
         return;
       }
-      if (_canExecuteImmediate(_pendingCommands.first)) {
-        final commands = List<SyncCommand>.from(_pendingCommands);
-        _pendingCommands.clear();
-        for (final command in commands) {
-          _executeCommand(command);
-        }
-      }
+      _processPendingCommands();
     });
+  }
+
+  void _processPendingCommands() {
+    if (_pendingCommands.isEmpty) return;
+    if (_canExecuteImmediate(_pendingCommands.first)) {
+      final commands = List<SyncCommand>.from(_pendingCommands);
+      _pendingCommands.clear();
+      for (final command in commands) {
+        _executeCommand(command);
+      }
+    }
   }
 
   void _executeCommand(SyncCommand command) {
@@ -214,6 +244,33 @@ class _MyHomePageState extends State<MyHomePage> {
       case SyncCommand.exit:
         _mediaPlayerController.exit(fromRemote: true);
         break;
+    }
+  }
+
+  Future<void> _loadLocalAddresses() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        includeLinkLocal: false,
+        type: InternetAddressType.IPv4,
+      );
+      final addresses = <String>{};
+      for (final interface in interfaces) {
+        for (final addr in interface.addresses) {
+          if (addr.type == InternetAddressType.IPv4) {
+            addresses.add(addr.address);
+          }
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _localAddresses = addresses.isEmpty
+              ? const ['알 수 없음']
+              : addresses.toList();
+        });
+      }
+    } catch (error) {
+      debugPrint('Failed to load local addresses: $error');
     }
   }
 
@@ -319,6 +376,52 @@ class _MyHomePageState extends State<MyHomePage> {
                           ),
                         ],
                       ),
+                      const SizedBox(height: 16),
+                      if (_mode == AppMode.server) ...[
+                        Text(
+                          '서버 주소',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 8),
+                        Column(
+                          children: _localAddresses
+                              .map(
+                                (address) => Text(
+                                  address,
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(color: Colors.grey.shade700),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ] else ...[
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            '서버 주소',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: 260,
+                          child: TextField(
+                            controller: _serverAddressController,
+                            decoration: const InputDecoration(
+                              border: OutlineInputBorder(),
+                              hintText: '예: 192.168.0.10',
+                              isDense: true,
+                            ),
+                            onSubmitted: (_) => _connectToServer(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ElevatedButton.icon(
+                          onPressed: _connectToServer,
+                          icon: const Icon(Icons.link),
+                          label: const Text('서버 연결'),
+                        ),
+                      ],
                       const SizedBox(height: 24),
                       Text(
                         _mode == AppMode.client
