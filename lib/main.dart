@@ -608,7 +608,7 @@ class _MyHomePageState extends State<MyHomePage> {
     );
 
     // 큰 차이(500ms 이상)는 즉시 seekTo로 맞춤
-    if (absDiff > 500) {
+    if (absDiff > 400) {
       debugPrint(
         '[UdpSync] Large diff: ${diff}ms, seeking to ${serverElapsedAdjusted}ms',
       );
@@ -623,7 +623,7 @@ class _MyHomePageState extends State<MyHomePage> {
     }
 
     // 작은 차이(100ms 이상)는 재생 속도 조절
-    if (absDiff > 100) {
+    if (absDiff > 80) {
       // 차이를 줄이기 위한 속도 계산
       // 서버보다 느리면 빠르게 (diff > 0), 빠르면 느리게 (diff < 0)
       double targetSpeed;
@@ -636,7 +636,7 @@ class _MyHomePageState extends State<MyHomePage> {
       }
 
       // 속도 변화가 크면 점진적으로 조절
-      if ((targetSpeed - _currentPlaybackSpeed).abs() > 0.01) {
+      if ((targetSpeed - _currentPlaybackSpeed).abs() > 0.003) {
         _currentPlaybackSpeed = targetSpeed;
         _mediaPlayerController.adjustPlaybackSpeed(targetSpeed);
         debugPrint(
@@ -716,7 +716,7 @@ class _MyHomePageState extends State<MyHomePage> {
           padding: const EdgeInsets.all(16),
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.6),
+              color: Colors.black.withValues(alpha: 0.6),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: healthy ? Colors.greenAccent : Colors.redAccent,
@@ -740,7 +740,7 @@ class _MyHomePageState extends State<MyHomePage> {
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: color.withOpacity(0.7),
+                              color: color.withValues(alpha: 0.7),
                               blurRadius: 8,
                               spreadRadius: 1,
                             ),
