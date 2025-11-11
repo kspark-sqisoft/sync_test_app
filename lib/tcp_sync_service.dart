@@ -24,7 +24,8 @@ class TcpSyncService {
   final Set<Socket> _clients = {};
 
   Socket? _clientSocket;
-  StreamSubscription<String>? _clientSubscription;
+  StreamSubscription<List<int>>? _clientSubscription;
+  String _clientBuffer = '';
   StreamSubscription<Socket>? _serverSubscription;
   Timer? _reconnectTimer;
 
@@ -111,7 +112,9 @@ class TcpSyncService {
 
   void _handleIncomingConnection(Socket client) {
     _clients.add(client);
-    debugPrint('Client connected: ${client.remoteAddress.address}:${client.remotePort}');
+    debugPrint(
+      'Client connected: ${client.remoteAddress.address}:${client.remotePort}',
+    );
     client.done.then((_) => _removeClient(client));
     client.listen(
       (_) {},
@@ -125,7 +128,9 @@ class TcpSyncService {
 
   Future<void> _removeClient(Socket client) async {
     if (_clients.remove(client)) {
-      debugPrint('Client disconnected: ${client.remoteAddress.address}:${client.remotePort}');
+      debugPrint(
+        'Client disconnected: ${client.remoteAddress.address}:${client.remotePort}',
+      );
     }
     try {
       await client.close();
@@ -150,11 +155,9 @@ class TcpSyncService {
         timeout: const Duration(seconds: 3),
       );
       _clientSocket = socket;
-      _clientSubscription = socket
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen(
-        _handleIncomingLine,
+      _clientBuffer = '';
+      _clientSubscription = socket.listen(
+        _handleIncomingData,
         onError: (error) {
           debugPrint('TCP client error: $error');
           _scheduleReconnect();
@@ -169,10 +172,19 @@ class TcpSyncService {
     }
   }
 
-  void _handleIncomingLine(String line) {
-    final command = _stringToCommand(line.trim());
-    if (command != null) {
-      onCommand(command);
+  void _handleIncomingData(List<int> data) {
+    if (_clientSocket == null) {
+      return;
+    }
+    _clientBuffer += utf8.decode(data);
+    int newlineIndex;
+    while ((newlineIndex = _clientBuffer.indexOf('\n')) != -1) {
+      final line = _clientBuffer.substring(0, newlineIndex).trim();
+      _clientBuffer = _clientBuffer.substring(newlineIndex + 1);
+      final command = _stringToCommand(line);
+      if (command != null) {
+        onCommand(command);
+      }
     }
   }
 
@@ -214,4 +226,3 @@ class TcpSyncService {
     return null;
   }
 }
-
