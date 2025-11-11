@@ -89,10 +89,16 @@ class TcpSyncService {
     if (!_isServer) return;
     final message = '${_encodeCommand(command)}\n';
     final data = utf8.encode(message);
+    debugPrint(
+      '[TcpSyncService] send ${command.type} payload=${command.payload}',
+    );
     for (final client in _clients.toList()) {
       try {
         client.add(data);
         await client.flush();
+        debugPrint(
+          '[TcpSyncService] -> ${client.address}:$port ${command.type} payload=${command.payload}',
+        );
       } catch (error) {
         debugPrint('Failed to send command to ${client.remoteAddress}: $error');
         await _removeClient(client);
@@ -255,6 +261,8 @@ class TcpSyncService {
     }
     final payload = parts.length > 1 ? parts.sublist(1).join('|') : null;
     final value = payload?.replaceAll('\\n', '\n');
-    return SyncCommand(type, payload: value);
+    final command = SyncCommand(type, payload: value);
+    debugPrint('[TcpSyncService] recv $type payload=$value');
+    return command;
   }
 }

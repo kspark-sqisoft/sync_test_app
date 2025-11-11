@@ -144,15 +144,18 @@ class _MyHomePageState extends State<MyHomePage> {
       _syncService = service;
       _isClientConnected = _mode == AppMode.server ? true : false;
     });
+    debugPrint('[Main] Sync service restarted mode=$_mode');
   }
 
   Future<void> _broadcastCommand(SyncCommand command) async {
     if (_mode != AppMode.server) return;
+    debugPrint('[Main] broadcast ${command.type} payload=${command.payload}');
     await _syncService?.sendCommand(command);
   }
 
   void _handleMediaPlayerAction(MediaPlayerEvent event) {
     final payload = event.index.toString();
+    debugPrint('[Main] local action ${event.action} index=${event.index}');
     _initialMediaIndex = event.index;
     switch (event.action) {
       case MediaPlayerAction.next:
@@ -181,6 +184,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _handleRemoteCommand(SyncCommand command) {
     if (!mounted) return;
+    debugPrint('[Main] remote ${command.type} payload=${command.payload}');
     switch (command.type) {
       case SyncCommandType.startNow:
         final (index, time) = _decodeIndexTime(command.payload);
@@ -254,6 +258,7 @@ class _MyHomePageState extends State<MyHomePage> {
     if (_mode != AppMode.client) return;
     final address = _serverAddressController.text.trim();
     if (address.isEmpty) return;
+    debugPrint('[Main] connect to server $address');
     final service = _syncService;
     if (service == null) {
       await _restartSyncService();
@@ -265,6 +270,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _disconnectFromServer() async {
     if (_mode != AppMode.client) return;
+    debugPrint('[Main] disconnect from server');
     _connectionSub?.cancel();
     _connectionSub = null;
     await _syncService?.stop();
@@ -448,6 +454,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
     _startTimer = Timer(delay, () {
       if (!mounted) return;
+      debugPrint('[Main] auto start playback @ $scheduled');
       startPlayback();
     });
 
@@ -465,6 +472,7 @@ class _MyHomePageState extends State<MyHomePage> {
     if (index != null) {
       _initialMediaIndex = index;
     }
+    debugPrint('[Main] apply schedule index=$index time=$scheduled');
     _applySchedule(scheduled, shouldBroadcastOnStart: false);
   }
 
