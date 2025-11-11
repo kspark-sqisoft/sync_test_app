@@ -20,6 +20,7 @@ class UdpSyncService {
   RawDatagramSocket? _socket;
   StreamSubscription<RawSocketEvent>? _subscription;
   List<InternetAddress> _broadcastTargets = const [];
+  Set<String> _localIpAddresses = const {};
 
   bool get _isServer => mode == AppMode.server;
 
@@ -28,6 +29,10 @@ class UdpSyncService {
 
     if (_isServer) {
       _broadcastTargets = await _resolveBroadcastTargets();
+      _localIpAddresses = await _resolveLocalIpAddresses();
+    } else {
+      _broadcastTargets = const [];
+      _localIpAddresses = await _resolveLocalIpAddresses();
     }
 
     final socket = await RawDatagramSocket.bind(
@@ -50,10 +55,8 @@ class UdpSyncService {
     );
   }
 
-  void sendCommand(SyncCommand command) {
+  Future<void> sendCommand(SyncCommand command) async {
     if (!_isServer) return;
-    final socket = _socket;
-    if (socket == null) return;
     final message = _commandToString(command);
     final bytes = utf8.encode(message);
 
@@ -61,12 +64,26 @@ class UdpSyncService {
         ? [InternetAddress('255.255.255.255')]
         : _broadcastTargets;
 
-    for (final target in targets) {
-      try {
-        socket.send(bytes, target, port);
-      } catch (error) {
-        debugPrint('Failed to send UDP packet to ${target.address}: $error');
+    RawDatagramSocket? socket;
+    try {
+      socket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        0,
+        reuseAddress: true,
+        reusePort: true,
+      );
+      socket.broadcastEnabled = true;
+      for (final target in targets) {
+        try {
+          socket.send(bytes, target, port);
+        } catch (error) {
+          debugPrint('Failed to send UDP packet to ${target.address}: $error');
+        }
       }
+    } catch (error) {
+      debugPrint('Unable to create UDP send socket: $error');
+    } finally {
+      socket?.close();
     }
   }
 
@@ -97,7 +114,11 @@ class UdpSyncService {
     }
     Datagram? datagram;
     while ((datagram = socket.receive()) != null) {
-      final message = utf8.decode(datagram!.data).trim();
+      final messageAddress = datagram!.address.address;
+      if (_localIpAddresses.contains(messageAddress)) {
+        continue;
+      }
+      final message = utf8.decode(datagram.data).trim();
       final command = _stringToCommand(message);
       if (command != null) {
         onCommand(command);
@@ -115,12 +136,10 @@ class UdpSyncService {
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
           if (addr.type != InternetAddressType.IPv4) continue;
-          final parts = addr.address.split('.');
-          if (parts.length != 4) continue;
-          final broadcast = InternetAddress(
-            '${parts[0]}.${parts[1]}.${parts[2]}.255',
-          );
-          targets.add(broadcast);
+          final broadcast = _calculateBroadcastAddress(addr);
+          if (broadcast != null) {
+            targets.add(broadcast);
+          }
         }
       }
     } catch (error, stack) {
@@ -128,6 +147,32 @@ class UdpSyncService {
       debugPrint('$stack');
     }
     return targets.toList();
+  }
+
+  Future<Set<String>> _resolveLocalIpAddresses() async {
+    final results = <String>{};
+    try {
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: true,
+        type: InternetAddressType.IPv4,
+      );
+      for (final interface in interfaces) {
+        for (final addr in interface.addresses) {
+          if (addr.type == InternetAddressType.IPv4) {
+            results.add(addr.address);
+          }
+        }
+      }
+    } catch (error) {
+      debugPrint('Failed to resolve local IP addresses: $error');
+    }
+    return results;
+  }
+
+  InternetAddress? _calculateBroadcastAddress(InternetAddress address) {
+    final parts = address.address.split('.');
+    if (parts.length != 4) return null;
+    return InternetAddress('${parts[0]}.${parts[1]}.${parts[2]}.255');
   }
 
   String _commandToString(SyncCommand command) {
