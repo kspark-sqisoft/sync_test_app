@@ -58,6 +58,10 @@ class _MyHomePageState extends State<MyHomePage> {
   int _playbackSession = 0;
   StreamSubscription<bool>? _connectionSub;
   double _currentPlaybackSpeed = 1.0;
+  Timer? _pingTimer;
+  int? _lastPingSentMs;
+  int _networkDelayMs = 0;
+  int _clockOffsetMs = 0;
   int? _lastSyncDiffMs;
   bool _syncHealthy = true;
   DateTime? _lastSyncUpdatedAt;
@@ -86,6 +90,7 @@ class _MyHomePageState extends State<MyHomePage> {
     _mediaPlayerController.dispose();
     _pendingCommandTimer?.cancel();
     _udpBroadcastTimer?.cancel();
+    _pingTimer?.cancel();
     _serverAddressController.dispose();
     _connectionSub?.cancel();
     super.dispose();
@@ -150,6 +155,9 @@ class _MyHomePageState extends State<MyHomePage> {
     final previous = _syncService;
     _connectionSub?.cancel();
     _connectionSub = null;
+    if (_mode == AppMode.client) {
+      _stopPingTimer();
+    }
     await previous?.stop();
     final service = TcpSyncService(
       port: _tcpPort,
@@ -167,6 +175,13 @@ class _MyHomePageState extends State<MyHomePage> {
       setState(() {
         _isClientConnected = connected;
       });
+      if (_mode == AppMode.client) {
+        if (connected) {
+          _startPingTimer();
+        } else {
+          _stopPingTimer();
+        }
+      }
     });
     setState(() {
       _syncService = service;
@@ -251,13 +266,76 @@ class _MyHomePageState extends State<MyHomePage> {
       case SyncCommandType.schedule:
         _handleScheduleCommand(command.payload);
         break;
+      case SyncCommandType.ping:
+        // handled at transport layer
+        break;
+      case SyncCommandType.pong:
+        _handlePongCommand(command.payload);
+        break;
     }
+  }
+
+  void _startPingTimer() {
+    if (_mode != AppMode.client) return;
+    _pingTimer?.cancel();
+    _sendPing();
+    _pingTimer = Timer.periodic(const Duration(seconds: 3), (_) => _sendPing());
+  }
+
+  void _stopPingTimer() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
+    _lastPingSentMs = null;
+  }
+
+  void _sendPing() {
+    if (_mode != AppMode.client) return;
+    final service = _syncService;
+    if (service == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _lastPingSentMs = now;
+    debugPrint('[Ping] send $now');
+    unawaited(
+      service.sendClientCommand(
+        SyncCommand(SyncCommandType.ping, payload: now.toString()),
+      ),
+    );
+  }
+
+  void _handlePongCommand(String? payload) {
+    if (_mode != AppMode.client) return;
+    final parts = payload?.split('|');
+    if (parts == null || parts.length < 2) return;
+    final sentMs = int.tryParse(parts[0]);
+    final serverMs = int.tryParse(parts[1]);
+    if (sentMs == null || serverMs == null) return;
+    if (_lastPingSentMs != null && sentMs != _lastPingSentMs) {
+      debugPrint(
+        '[Ping] ignoring pong for stale ping sent=$sentMs expected=$_lastPingSentMs',
+      );
+      return;
+    }
+    final receiveMs = DateTime.now().millisecondsSinceEpoch;
+    final rtt = receiveMs - sentMs;
+    if (rtt <= 0) return;
+    final delay = (rtt / 2).round();
+    final offset = serverMs - (sentMs + delay);
+    _networkDelayMs = delay;
+    _clockOffsetMs = offset;
+    debugPrint('[Ping] pong rtt=${rtt}ms delay=$delay offset=$offset');
+    final diff = _lastSyncDiffMs ?? 0;
+    _updateSyncStatus(
+      diffMs: diff,
+      healthy: _syncHealthy,
+      status: '핑 RTT=${rtt}ms 지연≈${delay}ms 오프셋=${offset}ms',
+    );
   }
 
   Future<void> _changeMode(AppMode mode) async {
     if (_mode == mode) return;
     _startTimer?.cancel();
     _startTimer = null;
+    _stopPingTimer();
     if (_showVideo) {
       _mediaPlayerController.exit(fromRemote: true);
     }
@@ -267,6 +345,8 @@ class _MyHomePageState extends State<MyHomePage> {
         _scheduledDateTime = null;
       }
     });
+    _networkDelayMs = 0;
+    _clockOffsetMs = 0;
     if (mode == AppMode.server) {
       await _loadLocalAddresses();
     }
@@ -301,6 +381,10 @@ class _MyHomePageState extends State<MyHomePage> {
     debugPrint('[Main] disconnect from server');
     _connectionSub?.cancel();
     _connectionSub = null;
+    _stopPingTimer();
+    _networkDelayMs = 0;
+    _clockOffsetMs = 0;
+    _lastPingSentMs = null;
     await _syncService?.stop();
     setState(() {
       _syncService = null;
@@ -385,6 +469,9 @@ class _MyHomePageState extends State<MyHomePage> {
         break;
       case SyncCommandType.schedule:
         _handleScheduleCommand(command.payload);
+        break;
+      case SyncCommandType.ping:
+      case SyncCommandType.pong:
         break;
     }
   }
@@ -589,7 +676,8 @@ class _MyHomePageState extends State<MyHomePage> {
       _updateSyncStatus(
         diffMs: 0,
         healthy: false,
-        status: '미디어 인덱스 불일치 → ${data.mediaIndex} 번으로 이동합니다.',
+        status:
+            '미디어 인덱스 불일치 → ${data.mediaIndex} 번으로 이동합니다. (지연≈${_networkDelayMs}ms)',
       );
       _mediaPlayerController.playAt(data.mediaIndex, fromRemote: true);
       return;
@@ -597,14 +685,19 @@ class _MyHomePageState extends State<MyHomePage> {
 
     // 네트워크 지연 보정
     final clientTime = DateTime.now().millisecondsSinceEpoch;
-    final networkDelay = (clientTime - data.serverTimestampMs) ~/ 2;
+    final rawFallbackDelay =
+        ((clientTime + _clockOffsetMs) - data.serverTimestampMs) ~/ 2;
+    int networkDelay = _networkDelayMs > 0 ? _networkDelayMs : rawFallbackDelay;
+    if (networkDelay < 0) {
+      networkDelay = 0;
+    }
     final serverElapsedAdjusted = data.elapsedMs + networkDelay;
 
     // 경과 시간 차이 계산
     final diff = serverElapsedAdjusted - clientElapsed;
     final absDiff = diff.abs();
     debugPrint(
-      '[UdpSync] diff=${diff}ms (networkDelay=$networkDelay, server=${data.elapsedMs}, client=$clientElapsed)',
+      '[UdpSync] diff=${diff}ms (networkDelay=$networkDelay, server=${data.elapsedMs}, client=$clientElapsed, offset=$_clockOffsetMs)',
     );
 
     // 큰 차이(500ms 이상)는 즉시 seekTo로 맞춤
@@ -617,7 +710,7 @@ class _MyHomePageState extends State<MyHomePage> {
       _updateSyncStatus(
         diffMs: diff,
         healthy: false,
-        status: '큰 오차 감지 (Δ=${diff}ms) → 즉시 위치 조정',
+        status: '큰 오차 감지 (Δ=${diff}ms, 지연≈${networkDelay}ms) → 즉시 위치 조정',
       );
       return;
     }
@@ -647,7 +740,7 @@ class _MyHomePageState extends State<MyHomePage> {
         diffMs: diff,
         healthy: absDiff <= 150,
         status:
-            '속도 조절 중 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x)',
+            '속도 조절 중 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x, 지연≈${networkDelay}ms)',
       );
     } else {
       // 차이가 작으면 정상 속도로 복귀
@@ -660,7 +753,7 @@ class _MyHomePageState extends State<MyHomePage> {
         diffMs: diff,
         healthy: true,
         status:
-            '안정 상태 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x)',
+            '안정 상태 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x, 지연≈${networkDelay}ms)',
       );
     }
   }

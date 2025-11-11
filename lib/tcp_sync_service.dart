@@ -27,6 +27,7 @@ class TcpSyncService {
   StreamSubscription<List<int>>? _clientSubscription;
   String _clientBuffer = '';
   StreamSubscription<Socket>? _serverSubscription;
+  final Map<Socket, String> _serverClientBuffers = {};
   Timer? _reconnectTimer;
   final StreamController<bool> _connectionStateController =
       StreamController<bool>.broadcast();
@@ -106,6 +107,25 @@ class TcpSyncService {
     }
   }
 
+  Future<void> sendClientCommand(SyncCommand command) async {
+    if (_isServer) return;
+    final socket = _clientSocket;
+    if (socket == null) return;
+    final message = '${_encodeCommand(command)}\n';
+    final data = utf8.encode(message);
+    try {
+      socket.add(data);
+      await socket.flush();
+      debugPrint(
+        '[TcpSyncService] client send ${command.type} payload=${command.payload}',
+      );
+    } catch (error) {
+      debugPrint('Failed to send command to server: $error');
+      await _clientSocket?.close();
+      _scheduleReconnect();
+    }
+  }
+
   Future<void> updateServerAddress(String address) async {
     serverAddress = address;
     if (!_isServer) {
@@ -131,12 +151,13 @@ class TcpSyncService {
 
   void _handleIncomingConnection(Socket client) {
     _clients.add(client);
+    _serverClientBuffers[client] = '';
     debugPrint(
       'Client connected: ${client.remoteAddress.address}:${client.remotePort}',
     );
     client.done.then((_) => _removeClient(client));
     client.listen(
-      (_) {},
+      (data) => _handleServerClientData(client, data),
       onError: (error) {
         debugPrint('Client socket error: $error');
       },
@@ -151,6 +172,7 @@ class TcpSyncService {
         'Client disconnected: ${client.remoteAddress.address}:${client.remotePort}',
       );
     }
+    _serverClientBuffers.remove(client);
     try {
       await client.close();
     } catch (_) {}
@@ -220,10 +242,65 @@ class TcpSyncService {
     _reconnectTimer = Timer(const Duration(seconds: 3), _connectToServer);
   }
 
+  Future<void> _sendToClient(Socket client, SyncCommand command) async {
+    final message = '${_encodeCommand(command)}\n';
+    final data = utf8.encode(message);
+    try {
+      client.add(data);
+      await client.flush();
+      debugPrint(
+        '[TcpSyncService] -> ${client.remoteAddress.address}:${client.remotePort} '
+        '${command.type} payload=${command.payload}',
+      );
+    } catch (error) {
+      debugPrint(
+        'Failed to respond to ${client.remoteAddress.address}:${client.remotePort}: $error',
+      );
+      await _removeClient(client);
+    }
+  }
+
   void _setClientConnected(bool value) {
     if (_isConnected == value) return;
     _isConnected = value;
     _connectionStateController.add(value);
+  }
+
+  void _handleServerClientData(Socket client, List<int> data) {
+    var buffer = (_serverClientBuffers[client] ?? '') + utf8.decode(data);
+    int newlineIndex;
+    while ((newlineIndex = buffer.indexOf('\n')) != -1) {
+      final line = buffer.substring(0, newlineIndex).trim();
+      buffer = buffer.substring(newlineIndex + 1);
+      if (line.isEmpty) continue;
+      final command = _decodeCommand(line);
+      if (command == null) continue;
+      switch (command.type) {
+        case SyncCommandType.ping:
+          final clientTime = int.tryParse(command.payload ?? '');
+          final serverTime = DateTime.now().millisecondsSinceEpoch;
+          final payload = clientTime == null
+              ? '0|$serverTime'
+              : '$clientTime|$serverTime';
+          debugPrint(
+            '[TcpSyncService] ping from ${client.remoteAddress.address}:${client.remotePort} clientTime=${command.payload}',
+          );
+          unawaited(
+            _sendToClient(
+              client,
+              SyncCommand(SyncCommandType.pong, payload: payload),
+            ),
+          );
+          break;
+        case SyncCommandType.pong:
+          // Ignore pong on server side
+          break;
+        default:
+          onCommand(command);
+          break;
+      }
+    }
+    _serverClientBuffers[client] = buffer;
   }
 
   String _encodeCommand(SyncCommand command) {
@@ -260,6 +337,10 @@ class TcpSyncService {
         return 'EXIT';
       case SyncCommandType.schedule:
         return 'SCHEDULE';
+      case SyncCommandType.ping:
+        return 'PING';
+      case SyncCommandType.pong:
+        return 'PONG';
     }
   }
 
@@ -275,6 +356,10 @@ class TcpSyncService {
         return SyncCommandType.exit;
       case 'SCHEDULE':
         return SyncCommandType.schedule;
+      case 'PING':
+        return SyncCommandType.ping;
+      case 'PONG':
+        return SyncCommandType.pong;
       default:
         return null;
     }
