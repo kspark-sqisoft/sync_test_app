@@ -54,6 +54,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Timer? _udpBroadcastTimer;
   List<String> _localAddresses = const [];
   bool _isClientConnected = false;
+  bool _udpSyncEnabled = true;
   int _initialMediaIndex = 0;
   int _playbackSession = 0;
   StreamSubscription<bool>? _connectionSub;
@@ -110,7 +111,9 @@ class _MyHomePageState extends State<MyHomePage> {
     _currentPlaybackSpeed = 1.0;
     _lastSyncDiffMs = null;
     _syncHealthy = true;
-    _syncStatusMessage = '동기화 정보를 수신 대기중입니다.';
+    _syncStatusMessage = _udpSyncEnabled
+        ? '동기화 정보를 수신 대기중입니다.'
+        : 'UDP 동기화 비활성화됨';
     _lastSyncUpdatedAt = null;
     setState(() {
       _scheduledDateTime = startTime;
@@ -128,7 +131,9 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
     _schedulePendingCommandProcessing();
-    _startUdpSyncService();
+    if (_udpSyncEnabled) {
+      _startUdpSyncService();
+    }
   }
 
   void _handleMediaPlayerExit() {
@@ -143,7 +148,9 @@ class _MyHomePageState extends State<MyHomePage> {
     _currentPlaybackSpeed = 1.0;
     _lastSyncDiffMs = null;
     _syncHealthy = true;
-    _syncStatusMessage = '동기화 정보를 수신 대기중입니다.';
+    _syncStatusMessage = _udpSyncEnabled
+        ? '동기화 정보를 수신 대기중입니다.'
+        : 'UDP 동기화 비활성화됨';
     _lastSyncUpdatedAt = null;
     setState(() {
       _scheduledDateTime = null;
@@ -591,6 +598,33 @@ class _MyHomePageState extends State<MyHomePage> {
     _applySchedule(scheduled, shouldBroadcastOnStart: false);
   }
 
+  void _setUdpSyncEnabled(bool value) {
+    if (_udpSyncEnabled == value) return;
+    if (!value) {
+      _udpBroadcastTimer?.cancel();
+      _udpBroadcastTimer = null;
+      unawaited(_udpSyncService?.stop());
+      setState(() {
+        _udpSyncEnabled = value;
+        _lastSyncDiffMs = null;
+        _syncHealthy = true;
+        _syncStatusMessage = 'UDP 동기화 비활성화됨';
+      });
+      return;
+    }
+
+    setState(() {
+      _udpSyncEnabled = value;
+      _syncHealthy = true;
+      _lastSyncDiffMs = null;
+      _syncStatusMessage = '동기화 정보를 수신 대기중입니다.';
+    });
+
+    if (_showVideo) {
+      _startUdpSyncService();
+    }
+  }
+
   (int?, DateTime?) _decodeIndexTime(String? payload) {
     if (payload == null || payload.isEmpty) return (null, null);
     final separator = payload.indexOf(',');
@@ -625,6 +659,9 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _startUdpSyncService() async {
+    if (!_udpSyncEnabled) {
+      return;
+    }
     await _udpSyncService?.stop();
     final service = UdpSyncService(
       port: _udpSyncPort,
@@ -637,6 +674,11 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
     _udpSyncService = service;
+    setState(() {
+      _syncHealthy = true;
+      _lastSyncDiffMs = null;
+      _syncStatusMessage = '동기화 정보를 수신 대기중입니다.';
+    });
 
     if (_mode == AppMode.server) {
       // 서버: 주기적으로 현재 상태 브로드캐스트
@@ -649,7 +691,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _broadcastUdpSyncData() {
-    if (_mode != AppMode.server || !_showVideo) return;
+    if (!_udpSyncEnabled || _mode != AppMode.server || !_showVideo) return;
     final index = _mediaPlayerController.currentIndex ?? _initialMediaIndex;
     final elapsed =
         _mediaPlayerController.currentElapsedMs ?? _estimatedElapsedMs();
@@ -660,7 +702,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _handleSyncData(MediaSyncData data) {
-    if (_mode != AppMode.client || !_showVideo) return;
+    if (!_udpSyncEnabled || _mode != AppMode.client || !_showVideo) return;
     if (!_mediaPlayerController.isAttached) return;
 
     final clientIndex = _mediaPlayerController.currentIndex;
@@ -900,7 +942,8 @@ class _MyHomePageState extends State<MyHomePage> {
                     initialIndex: _initialMediaIndex,
                     isActive: _showVideo,
                   ),
-                  if (_mode == AppMode.client) _buildSyncIndicator(context),
+                  if (_mode == AppMode.client && _udpSyncEnabled)
+                    _buildSyncIndicator(context),
                 ],
               )
             : Center(
@@ -998,6 +1041,18 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                       ],
                       const SizedBox(height: 24),
+                      SwitchListTile.adaptive(
+                        value: _udpSyncEnabled,
+                        onChanged: (value) => _setUdpSyncEnabled(value),
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('UDP 동기화 사용'),
+                        subtitle: Text(
+                          _mode == AppMode.server
+                              ? '서버가 UDP 브로드캐스트로 클라이언트를 동기화합니다.'
+                              : '서버로부터 UDP 브로드캐스트를 수신해 동기화합니다.',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       Text(
                         _mode == AppMode.client
                             ? '클라이언트 모드입니다. 서버 신호를 기다리고 있습니다.'
