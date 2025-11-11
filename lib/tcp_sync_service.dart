@@ -227,7 +227,7 @@ class TcpSyncService {
   }
 
   String _encodeCommand(SyncCommand command) {
-    final type = command.type.name.toUpperCase();
+    final type = _encodeType(command.type);
     if (command.payload == null || command.payload!.isEmpty) {
       return type;
     }
@@ -239,30 +239,44 @@ class TcpSyncService {
     if (raw.isEmpty) return null;
     final parts = raw.split('|');
     final typeString = parts.first.toUpperCase();
-    SyncCommandType type;
-    switch (typeString) {
-      case 'START_NOW':
-        type = SyncCommandType.startNow;
-        break;
-      case 'NEXT':
-        type = SyncCommandType.next;
-        break;
-      case 'PREVIOUS':
-        type = SyncCommandType.previous;
-        break;
-      case 'EXIT':
-        type = SyncCommandType.exit;
-        break;
-      case 'SCHEDULE':
-        type = SyncCommandType.schedule;
-        break;
-      default:
-        return null;
-    }
+    final type = _decodeType(typeString);
+    if (type == null) return null;
     final payload = parts.length > 1 ? parts.sublist(1).join('|') : null;
     final value = payload?.replaceAll('\\n', '\n');
     final command = SyncCommand(type, payload: value);
     debugPrint('[TcpSyncService] recv $type payload=$value');
     return command;
+  }
+
+  String _encodeType(SyncCommandType type) {
+    switch (type) {
+      case SyncCommandType.startNow:
+        return 'START_NOW';
+      case SyncCommandType.next:
+        return 'NEXT';
+      case SyncCommandType.previous:
+        return 'PREVIOUS';
+      case SyncCommandType.exit:
+        return 'EXIT';
+      case SyncCommandType.schedule:
+        return 'SCHEDULE';
+    }
+  }
+
+  SyncCommandType? _decodeType(String value) {
+    switch (value) {
+      case 'START_NOW':
+        return SyncCommandType.startNow;
+      case 'NEXT':
+        return SyncCommandType.next;
+      case 'PREVIOUS':
+        return SyncCommandType.previous;
+      case 'EXIT':
+        return SyncCommandType.exit;
+      case 'SCHEDULE':
+        return SyncCommandType.schedule;
+      default:
+        return null;
+    }
   }
 }
