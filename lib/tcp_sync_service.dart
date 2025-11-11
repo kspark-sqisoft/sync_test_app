@@ -28,8 +28,19 @@ class TcpSyncService {
   String _clientBuffer = '';
   StreamSubscription<Socket>? _serverSubscription;
   Timer? _reconnectTimer;
+  final StreamController<bool> _connectionStateController =
+      StreamController<bool>.broadcast();
+  bool _isConnected = false;
 
   bool get _isServer => mode == AppMode.server;
+  Stream<bool> get connectionState async* {
+    if (_isServer) {
+      yield true;
+    } else {
+      yield _isConnected;
+      yield* _connectionStateController.stream;
+    }
+  }
 
   Future<void> start({String? serverAddress}) async {
     await stop();
@@ -48,6 +59,7 @@ class TcpSyncService {
   Future<void> stop() async {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _setClientConnected(false);
 
     await _clientSubscription?.cancel();
     _clientSubscription = null;
@@ -70,11 +82,12 @@ class TcpSyncService {
 
   Future<void> dispose() async {
     await stop();
+    await _connectionStateController.close();
   }
 
   Future<void> sendCommand(SyncCommand command) async {
     if (!_isServer) return;
-    final message = '${_commandToString(command)}\n';
+    final message = '${_encodeCommand(command)}\n';
     final data = utf8.encode(message);
     for (final client in _clients.toList()) {
       try {
@@ -155,6 +168,7 @@ class TcpSyncService {
         timeout: const Duration(seconds: 3),
       );
       _clientSocket = socket;
+      _setClientConnected(true);
       _clientBuffer = '';
       _clientSubscription = socket.listen(
         _handleIncomingData,
@@ -181,7 +195,7 @@ class TcpSyncService {
     while ((newlineIndex = _clientBuffer.indexOf('\n')) != -1) {
       final line = _clientBuffer.substring(0, newlineIndex).trim();
       _clientBuffer = _clientBuffer.substring(newlineIndex + 1);
-      final command = _stringToCommand(line);
+      final command = _decodeCommand(line);
       if (command != null) {
         onCommand(command);
       }
@@ -193,36 +207,54 @@ class TcpSyncService {
     _clientSubscription = null;
     _clientSocket?.destroy();
     _clientSocket = null;
+    _setClientConnected(false);
 
     if (_isServer) return;
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 3), _connectToServer);
   }
 
-  String _commandToString(SyncCommand command) {
-    switch (command) {
-      case SyncCommand.startNow:
-        return 'START_NOW';
-      case SyncCommand.next:
-        return 'NEXT';
-      case SyncCommand.previous:
-        return 'PREVIOUS';
-      case SyncCommand.exit:
-        return 'EXIT';
-    }
+  void _setClientConnected(bool value) {
+    if (_isConnected == value) return;
+    _isConnected = value;
+    _connectionStateController.add(value);
   }
 
-  SyncCommand? _stringToCommand(String raw) {
-    switch (raw.toUpperCase()) {
-      case 'START_NOW':
-        return SyncCommand.startNow;
-      case 'NEXT':
-        return SyncCommand.next;
-      case 'PREVIOUS':
-        return SyncCommand.previous;
-      case 'EXIT':
-        return SyncCommand.exit;
+  String _encodeCommand(SyncCommand command) {
+    final type = command.type.name.toUpperCase();
+    if (command.payload == null || command.payload!.isEmpty) {
+      return type;
     }
-    return null;
+    final payload = command.payload!.replaceAll('\n', '\\n');
+    return '$type|$payload';
+  }
+
+  SyncCommand? _decodeCommand(String raw) {
+    if (raw.isEmpty) return null;
+    final parts = raw.split('|');
+    final typeString = parts.first.toUpperCase();
+    SyncCommandType type;
+    switch (typeString) {
+      case 'START_NOW':
+        type = SyncCommandType.startNow;
+        break;
+      case 'NEXT':
+        type = SyncCommandType.next;
+        break;
+      case 'PREVIOUS':
+        type = SyncCommandType.previous;
+        break;
+      case 'EXIT':
+        type = SyncCommandType.exit;
+        break;
+      case 'SCHEDULE':
+        type = SyncCommandType.schedule;
+        break;
+      default:
+        return null;
+    }
+    final payload = parts.length > 1 ? parts.sublist(1).join('|') : null;
+    final value = payload?.replaceAll('\\n', '\n');
+    return SyncCommand(type, payload: value);
   }
 }

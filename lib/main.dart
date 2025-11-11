@@ -50,6 +50,8 @@ class _MyHomePageState extends State<MyHomePage> {
   final List<SyncCommand> _pendingCommands = [];
   Timer? _pendingCommandTimer;
   List<String> _localAddresses = const [];
+  bool _isClientConnected = false;
+  StreamSubscription<bool>? _connectionSub;
 
   static const int _tcpPort = 8989;
 
@@ -65,22 +67,31 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void dispose() {
     _startTimer?.cancel();
-    _syncService?.dispose();
+    unawaited(_syncService?.dispose());
     _mediaPlayerController.dispose();
     _pendingCommandTimer?.cancel();
     _serverAddressController.dispose();
+    _connectionSub?.cancel();
     super.dispose();
   }
 
   void _startPlaybackNow({bool broadcast = true, DateTime? referenceTime}) {
     _startTimer?.cancel();
     _startTimer = null;
+    final startTime = referenceTime ?? DateTime.now();
     setState(() {
-      _scheduledDateTime = referenceTime ?? DateTime.now();
+      _scheduledDateTime = startTime;
       _showVideo = true;
     });
     if (_mode == AppMode.server && broadcast) {
-      _broadcastCommand(SyncCommand.startNow);
+      unawaited(
+        _broadcastCommand(
+          SyncCommand(
+            SyncCommandType.startNow,
+            payload: startTime.toUtc().toIso8601String(),
+          ),
+        ),
+      );
     }
     _schedulePendingCommandProcessing();
   }
@@ -99,6 +110,8 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _restartSyncService() async {
     final previous = _syncService;
+    _connectionSub?.cancel();
+    _connectionSub = null;
     await previous?.stop();
     final service = TcpSyncService(
       port: _tcpPort,
@@ -111,8 +124,15 @@ class _MyHomePageState extends State<MyHomePage> {
       service.dispose();
       return;
     }
+    _connectionSub = service.connectionState.listen((connected) {
+      if (!mounted) return;
+      setState(() {
+        _isClientConnected = connected;
+      });
+    });
     setState(() {
       _syncService = service;
+      _isClientConnected = _mode == AppMode.server ? true : _isClientConnected;
     });
   }
 
@@ -124,32 +144,40 @@ class _MyHomePageState extends State<MyHomePage> {
   void _handleMediaPlayerAction(MediaPlayerAction action) {
     switch (action) {
       case MediaPlayerAction.next:
-        unawaited(_broadcastCommand(SyncCommand.next));
+        unawaited(_broadcastCommand(const SyncCommand(SyncCommandType.next)));
         break;
       case MediaPlayerAction.previous:
-        unawaited(_broadcastCommand(SyncCommand.previous));
+        unawaited(
+          _broadcastCommand(const SyncCommand(SyncCommandType.previous)),
+        );
         break;
       case MediaPlayerAction.exit:
-        unawaited(_broadcastCommand(SyncCommand.exit));
+        unawaited(_broadcastCommand(const SyncCommand(SyncCommandType.exit)));
         break;
     }
   }
 
   void _handleRemoteCommand(SyncCommand command) {
     if (!mounted) return;
-    switch (command) {
-      case SyncCommand.startNow:
-        _startPlaybackNow(broadcast: false);
+    switch (command.type) {
+      case SyncCommandType.startNow:
+        _startPlaybackNow(
+          broadcast: false,
+          referenceTime: _parseDateTime(command.payload),
+        );
         _schedulePendingCommandProcessing();
         break;
-      case SyncCommand.next:
+      case SyncCommandType.next:
         _handleOrQueueRemoteCommand(command);
         break;
-      case SyncCommand.previous:
+      case SyncCommandType.previous:
         _handleOrQueueRemoteCommand(command);
         break;
-      case SyncCommand.exit:
+      case SyncCommandType.exit:
         _handleOrQueueRemoteCommand(command);
+        break;
+      case SyncCommandType.schedule:
+        _handleScheduleCommand(command.payload);
         break;
     }
   }
@@ -192,6 +220,7 @@ class _MyHomePageState extends State<MyHomePage> {
     } else {
       await service.updateServerAddress(address);
     }
+    await _restartSyncService();
   }
 
   bool _canExecuteImmediate(SyncCommand command) {
@@ -231,18 +260,24 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _executeCommand(SyncCommand command) {
-    switch (command) {
-      case SyncCommand.startNow:
-        _startPlaybackNow(broadcast: false);
+    switch (command.type) {
+      case SyncCommandType.startNow:
+        _startPlaybackNow(
+          broadcast: false,
+          referenceTime: _parseDateTime(command.payload),
+        );
         break;
-      case SyncCommand.next:
+      case SyncCommandType.next:
         _mediaPlayerController.playNext(fromRemote: true);
         break;
-      case SyncCommand.previous:
+      case SyncCommandType.previous:
         _mediaPlayerController.playPrevious(fromRemote: true);
         break;
-      case SyncCommand.exit:
+      case SyncCommandType.exit:
         _mediaPlayerController.exit(fromRemote: true);
+        break;
+      case SyncCommandType.schedule:
+        _handleScheduleCommand(command.payload);
         break;
     }
   }
@@ -257,7 +292,8 @@ class _MyHomePageState extends State<MyHomePage> {
       final addresses = <String>{};
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
-          if (addr.type == InternetAddressType.IPv4) {
+          if (addr.type == InternetAddressType.IPv4 &&
+              addr.rawAddress.length == 4) {
             addresses.add(addr.address);
           }
         }
@@ -301,23 +337,67 @@ class _MyHomePageState extends State<MyHomePage> {
       scheduled = scheduled.add(const Duration(days: 1));
     }
 
+    _applySchedule(scheduled, shouldBroadcastOnStart: true);
+
+    if (_mode == AppMode.server) {
+      unawaited(
+        _broadcastCommand(
+          SyncCommand(
+            SyncCommandType.schedule,
+            payload: scheduled.toUtc().toIso8601String(),
+          ),
+        ),
+      );
+    }
+  }
+
+  void _applySchedule(
+    DateTime scheduled, {
+    required bool shouldBroadcastOnStart,
+  }) {
     _startTimer?.cancel();
+    final now = DateTime.now();
+
+    void startPlayback() {
+      _startPlaybackNow(
+        broadcast: shouldBroadcastOnStart,
+        referenceTime: scheduled,
+      );
+    }
 
     final delay = scheduled.difference(now);
-    if (delay.inSeconds <= 0) {
-      _startPlaybackNow(referenceTime: scheduled);
+    if (delay <= Duration.zero) {
+      startPlayback();
       return;
     }
 
     _startTimer = Timer(delay, () {
       if (!mounted) return;
-      _startPlaybackNow(referenceTime: scheduled);
+      startPlayback();
     });
 
     setState(() {
       _scheduledDateTime = scheduled;
       _showVideo = false;
     });
+  }
+
+  void _handleScheduleCommand(String? payload) {
+    final scheduled = _parseDateTime(payload);
+    if (scheduled == null) {
+      return;
+    }
+    _applySchedule(scheduled, shouldBroadcastOnStart: false);
+  }
+
+  DateTime? _parseDateTime(String? value) {
+    if (value == null || value.isEmpty) return null;
+    try {
+      return DateTime.parse(value).toLocal();
+    } catch (error) {
+      debugPrint('Failed to parse date time payload: $value ($error)');
+      return null;
+    }
   }
 
   String _formatSchedule(DateTime dateTime) {
