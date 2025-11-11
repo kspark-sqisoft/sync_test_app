@@ -739,19 +739,21 @@ class _MyHomePageState extends State<MyHomePage> {
 
     // 네트워크 지연 보정
     final clientTime = DateTime.now().millisecondsSinceEpoch;
-    final rawFallbackDelay =
-        ((clientTime + _clockOffsetMs) - data.serverTimestampMs) ~/ 2;
-    int networkDelay = _networkDelayMs > 0 ? _networkDelayMs : rawFallbackDelay;
-    if (networkDelay < 0) {
-      networkDelay = 0;
+    int serverNowEstimate = clientTime + _clockOffsetMs;
+    int transit = serverNowEstimate - data.serverTimestampMs;
+    if (transit < 0) {
+      transit = 0;
     }
-    final serverElapsedAdjusted = data.elapsedMs + networkDelay;
+    if (_networkDelayMs > 0 && transit < _networkDelayMs) {
+      transit = _networkDelayMs;
+    }
+    final serverElapsedAdjusted = data.elapsedMs + transit;
 
     // 경과 시간 차이 계산
     final diff = serverElapsedAdjusted - clientElapsed;
     final absDiff = diff.abs();
     debugPrint(
-      '[UdpSync] diff=${diff}ms (networkDelay=$networkDelay, server=${data.elapsedMs}, client=$clientElapsed, offset=$_clockOffsetMs)',
+      '[UdpSync] diff=${diff}ms (transit=$transit, server=${data.elapsedMs}, client=$clientElapsed, offset=$_clockOffsetMs)',
     );
 
     // 큰 차이(500ms 이상)는 즉시 seekTo로 맞춤
@@ -764,7 +766,7 @@ class _MyHomePageState extends State<MyHomePage> {
       _updateSyncStatus(
         diffMs: diff,
         healthy: false,
-        status: '큰 오차 감지 (Δ=${diff}ms, 지연≈${networkDelay}ms) → 즉시 위치 조정',
+        status: '큰 오차 감지 (Δ=${diff}ms, 지연≈${transit}ms) → 즉시 위치 조정',
       );
       return;
     }
@@ -794,7 +796,7 @@ class _MyHomePageState extends State<MyHomePage> {
         diffMs: diff,
         healthy: absDiff <= 150,
         status:
-            '속도 조절 중 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x, 지연≈${networkDelay}ms)',
+            '속도 조절 중 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x, 지연≈${transit}ms)',
       );
     } else {
       // 차이가 작으면 정상 속도로 복귀
@@ -807,7 +809,7 @@ class _MyHomePageState extends State<MyHomePage> {
         diffMs: diff,
         healthy: true,
         status:
-            '안정 상태 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x, 지연≈${networkDelay}ms)',
+            '안정 상태 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x, 지연≈${transit}ms)',
       );
     }
   }
