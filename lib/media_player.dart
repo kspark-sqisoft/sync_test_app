@@ -6,6 +6,40 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
+enum MediaPlayerAction { next, previous, exit }
+
+class MediaPlayerController {
+  _MediaPlayerState? _state;
+
+  void _attach(_MediaPlayerState state) {
+    _state = state;
+  }
+
+  void _detach(_MediaPlayerState state) {
+    if (identical(_state, state)) {
+      _state = null;
+    }
+  }
+
+  bool get isAttached => _state != null;
+
+  void playNext({bool fromRemote = false}) {
+    _state?._playNext(fromExternal: fromRemote);
+  }
+
+  void playPrevious({bool fromRemote = false}) {
+    _state?._playPrevious(fromExternal: fromRemote);
+  }
+
+  void exit({bool fromRemote = false}) {
+    _state?._handleExit(fromExternal: fromRemote);
+  }
+
+  void dispose() {
+    _state = null;
+  }
+}
+
 class _NextMediaIntent extends Intent {
   const _NextMediaIntent();
 }
@@ -24,11 +58,15 @@ class MediaPlayer extends StatefulWidget {
     required this.mediaList,
     this.imageDisplayDuration = const Duration(seconds: 10),
     required this.onExit,
+    this.controller,
+    this.onAction,
   });
 
   final List<String> mediaList;
   final Duration imageDisplayDuration;
   final VoidCallback onExit;
+  final MediaPlayerController? controller;
+  final ValueChanged<MediaPlayerAction>? onAction;
 
   @override
   State<MediaPlayer> createState() => _MediaPlayerState();
@@ -44,6 +82,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
   late final FocusNode _focusNode;
   Duration _currentPosition = Duration.zero;
   Duration _currentDuration = Duration.zero;
+  MediaPlayerController? _controller;
 
   bool get _hasMedia => widget.mediaList.isNotEmpty;
   bool get _isCurrentVideo =>
@@ -53,6 +92,8 @@ class _MediaPlayerState extends State<MediaPlayer> {
   void initState() {
     super.initState();
     _focusNode = FocusNode();
+    _controller = widget.controller;
+    _controller?._attach(this);
     if (_hasMedia) {
       _playMedia(0);
     }
@@ -69,6 +110,11 @@ class _MediaPlayerState extends State<MediaPlayer> {
     if (!listEquals(oldWidget.mediaList, widget.mediaList) && _hasMedia) {
       _playMedia(0);
     }
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?._detach(this);
+      _controller = widget.controller;
+      _controller?._attach(this);
+    }
   }
 
   @override
@@ -77,6 +123,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
     _imageTimer?.cancel();
     _progressTimer?.cancel();
     _focusNode.dispose();
+    _controller?._detach(this);
     super.dispose();
   }
 
@@ -102,7 +149,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
       _initializeAndPlayVideo(mediaPath);
     } else {
       _startImageProgress(Duration.zero);
-      _imageTimer = Timer(widget.imageDisplayDuration, _playNext);
+      _imageTimer = Timer(widget.imageDisplayDuration, () => _playNext());
     }
   }
 
@@ -161,17 +208,23 @@ class _MediaPlayerState extends State<MediaPlayer> {
     }
   }
 
-  void _playNext() {
+  void _playNext({bool fromExternal = false}) {
     if (!_hasMedia || !mounted) return;
     final nextIndex = (_currentIndex + 1) % widget.mediaList.length;
     _playMedia(nextIndex);
+    if (!fromExternal) {
+      widget.onAction?.call(MediaPlayerAction.next);
+    }
   }
 
-  void _playPrevious() {
+  void _playPrevious({bool fromExternal = false}) {
     if (!_hasMedia || !mounted) return;
     final total = widget.mediaList.length;
     final previousIndex = (_currentIndex - 1 + total) % total;
     _playMedia(previousIndex);
+    if (!fromExternal) {
+      widget.onAction?.call(MediaPlayerAction.previous);
+    }
   }
 
   void _disposeVideoController() {
@@ -183,13 +236,16 @@ class _MediaPlayerState extends State<MediaPlayer> {
     }
   }
 
-  void _handleExit() {
+  void _handleExit({bool fromExternal = false}) {
     _advancing = false;
     _imageTimer?.cancel();
     _imageTimer = null;
     _progressTimer?.cancel();
     _progressTimer = null;
     _disposeVideoController();
+    if (!fromExternal) {
+      widget.onAction?.call(MediaPlayerAction.exit);
+    }
     widget.onExit();
   }
 
@@ -249,7 +305,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
         return;
       }
       _startImageProgress(clamped);
-      _imageTimer = Timer(remaining, _playNext);
+      _imageTimer = Timer(remaining, () => _playNext());
     }
   }
 
