@@ -360,6 +360,10 @@ class _MediaPlayerState extends State<MediaPlayer> {
         if (_currentPosition >= _currentDuration) {
           _currentPosition = _currentDuration;
           _progressTimer?.cancel();
+          if (widget.autoAdvance && _shouldPlay) {
+            _imageTimer?.cancel();
+            _imageTimer = Timer(widget.imageDisplayDuration, () => _playNext());
+          }
         }
       });
     });
