@@ -478,8 +478,8 @@ class _MyHomePageState extends State<MyHomePage> {
       }
       return (_parseIndex(payload), null);
     }
-    final indexPart = payload.substring(0, separator);
-    final timePart = payload.substring(separator + 1);
+    final indexPart = payload.substring(0, separator).trim();
+    final timePart = payload.substring(separator + 1).trim();
     return (_parseIndex(indexPart), _parseDateTime(timePart));
   }
 
@@ -488,7 +488,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   int? _parseIndex(String? value) {
     if (value == null || value.isEmpty) return null;
-    return int.tryParse(value);
+    return int.tryParse(value.trim());
   }
 
   DateTime? _parseDateTime(String? value) {
