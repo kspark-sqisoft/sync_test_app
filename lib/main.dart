@@ -141,18 +141,29 @@ class _MyHomePageState extends State<MyHomePage> {
     await _syncService?.sendCommand(command);
   }
 
-  void _handleMediaPlayerAction(MediaPlayerAction action) {
-    switch (action) {
+  void _handleMediaPlayerAction(MediaPlayerEvent event) {
+    final payload = event.index.toString();
+    switch (event.action) {
       case MediaPlayerAction.next:
-        unawaited(_broadcastCommand(const SyncCommand(SyncCommandType.next)));
+        unawaited(
+          _broadcastCommand(
+            SyncCommand(SyncCommandType.next, payload: payload),
+          ),
+        );
         break;
       case MediaPlayerAction.previous:
         unawaited(
-          _broadcastCommand(const SyncCommand(SyncCommandType.previous)),
+          _broadcastCommand(
+            SyncCommand(SyncCommandType.previous, payload: payload),
+          ),
         );
         break;
       case MediaPlayerAction.exit:
-        unawaited(_broadcastCommand(const SyncCommand(SyncCommandType.exit)));
+        unawaited(
+          _broadcastCommand(
+            SyncCommand(SyncCommandType.exit, payload: payload),
+          ),
+        );
         break;
     }
   }
@@ -279,10 +290,20 @@ class _MyHomePageState extends State<MyHomePage> {
         );
         break;
       case SyncCommandType.next:
-        _mediaPlayerController.playNext(fromRemote: true);
+        final index = _parseIndex(command.payload);
+        if (index != null) {
+          _mediaPlayerController.playAt(index, fromRemote: true);
+        } else {
+          _mediaPlayerController.playNext(fromRemote: true);
+        }
         break;
       case SyncCommandType.previous:
-        _mediaPlayerController.playPrevious(fromRemote: true);
+        final index = _parseIndex(command.payload);
+        if (index != null) {
+          _mediaPlayerController.playAt(index, fromRemote: true);
+        } else {
+          _mediaPlayerController.playPrevious(fromRemote: true);
+        }
         break;
       case SyncCommandType.exit:
         _mediaPlayerController.exit(fromRemote: true);
@@ -399,6 +420,11 @@ class _MyHomePageState extends State<MyHomePage> {
       return;
     }
     _applySchedule(scheduled, shouldBroadcastOnStart: false);
+  }
+
+  int? _parseIndex(String? value) {
+    if (value == null || value.isEmpty) return null;
+    return int.tryParse(value);
   }
 
   DateTime? _parseDateTime(String? value) {

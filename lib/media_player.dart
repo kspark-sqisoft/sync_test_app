@@ -8,6 +8,13 @@ import 'package:video_player/video_player.dart';
 
 enum MediaPlayerAction { next, previous, exit }
 
+class MediaPlayerEvent {
+  const MediaPlayerEvent(this.action, this.index);
+
+  final MediaPlayerAction action;
+  final int index;
+}
+
 class MediaPlayerController {
   _MediaPlayerState? _state;
 
@@ -29,6 +36,10 @@ class MediaPlayerController {
 
   void playPrevious({bool fromRemote = false}) {
     _state?._playPrevious(fromExternal: fromRemote);
+  }
+
+  void playAt(int index, {bool fromRemote = false}) {
+    _state?._jumpTo(index, fromExternal: fromRemote);
   }
 
   void exit({bool fromRemote = false}) {
@@ -67,7 +78,7 @@ class MediaPlayer extends StatefulWidget {
   final Duration imageDisplayDuration;
   final VoidCallback onExit;
   final MediaPlayerController? controller;
-  final ValueChanged<MediaPlayerAction>? onAction;
+  final ValueChanged<MediaPlayerEvent>? onAction;
   final bool autoAdvance;
 
   @override
@@ -157,6 +168,18 @@ class _MediaPlayerState extends State<MediaPlayer> {
     }
   }
 
+  void _jumpTo(int index, {bool fromExternal = false}) {
+    if (!_hasMedia || !mounted) return;
+    final total = widget.mediaList.length;
+    final normalized = ((index % total) + total) % total;
+    _playMedia(normalized);
+    if (!fromExternal) {
+      widget.onAction?.call(
+        MediaPlayerEvent(MediaPlayerAction.next, _currentIndex),
+      );
+    }
+  }
+
   void _initializeAndPlayVideo(String assetPath) {
     final controller = VideoPlayerController.asset(assetPath);
     _videoController = controller;
@@ -219,7 +242,9 @@ class _MediaPlayerState extends State<MediaPlayer> {
     final nextIndex = (_currentIndex + 1) % widget.mediaList.length;
     _playMedia(nextIndex);
     if (!fromExternal) {
-      widget.onAction?.call(MediaPlayerAction.next);
+      widget.onAction?.call(
+        MediaPlayerEvent(MediaPlayerAction.next, _currentIndex),
+      );
     }
   }
 
@@ -229,7 +254,9 @@ class _MediaPlayerState extends State<MediaPlayer> {
     final previousIndex = (_currentIndex - 1 + total) % total;
     _playMedia(previousIndex);
     if (!fromExternal) {
-      widget.onAction?.call(MediaPlayerAction.previous);
+      widget.onAction?.call(
+        MediaPlayerEvent(MediaPlayerAction.previous, _currentIndex),
+      );
     }
   }
 
@@ -250,7 +277,9 @@ class _MediaPlayerState extends State<MediaPlayer> {
     _progressTimer = null;
     _disposeVideoController();
     if (!fromExternal) {
-      widget.onAction?.call(MediaPlayerAction.exit);
+      widget.onAction?.call(
+        MediaPlayerEvent(MediaPlayerAction.exit, _currentIndex),
+      );
     }
     widget.onExit();
   }
