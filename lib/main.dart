@@ -52,6 +52,7 @@ class _MyHomePageState extends State<MyHomePage> {
   List<String> _localAddresses = const [];
   bool _isClientConnected = false;
   int _initialMediaIndex = 0;
+  int _playbackSession = 0;
   StreamSubscription<bool>? _connectionSub;
 
   static const int _tcpPort = 8989;
@@ -89,11 +90,13 @@ class _MyHomePageState extends State<MyHomePage> {
     final startIndex = mediaIndex ?? _currentMediaIndex;
     _initialMediaIndex = startIndex;
     final startTime = referenceTime ?? DateTime.now();
+    _playbackSession++;
     setState(() {
       _scheduledDateTime = startTime;
       _showVideo = true;
     });
     if (_mode == AppMode.server && broadcast) {
+      debugPrint('_startPlaybackNow');
       unawaited(
         _broadcastCommand(
           SyncCommand(
@@ -524,13 +527,14 @@ class _MyHomePageState extends State<MyHomePage> {
         duration: const Duration(milliseconds: 300),
         child: _showVideo
             ? MediaPlayer(
-                key: ValueKey(_scheduledDateTime),
+                key: ValueKey('session_$_playbackSession'),
                 mediaList: _mediaList,
                 controller: _mediaPlayerController,
                 onAction: _handleMediaPlayerAction,
                 onExit: _handleMediaPlayerExit,
                 autoAdvance: _mode == AppMode.server,
                 initialIndex: _initialMediaIndex,
+                isActive: _showVideo,
               )
             : Center(
                 child: Padding(

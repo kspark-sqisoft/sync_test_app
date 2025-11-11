@@ -75,6 +75,7 @@ class MediaPlayer extends StatefulWidget {
     this.onAction,
     this.autoAdvance = true,
     this.initialIndex = 0,
+    this.isActive = true,
   });
 
   final List<String> mediaList;
@@ -84,6 +85,7 @@ class MediaPlayer extends StatefulWidget {
   final ValueChanged<MediaPlayerEvent>? onAction;
   final bool autoAdvance;
   final int initialIndex;
+  final bool isActive;
 
   @override
   State<MediaPlayer> createState() => _MediaPlayerState();
@@ -104,6 +106,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
   bool get _hasMedia => widget.mediaList.isNotEmpty;
   bool get _isCurrentVideo =>
       _currentMedia != null && _isVideoPath(_currentMedia!);
+  bool get _shouldPlay => widget.isActive;
 
   int _normalizeIndex(int index) {
     final total = widget.mediaList.length;
@@ -179,7 +182,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
       _initializeAndPlayVideo(mediaPath);
     } else {
       _startImageProgress(Duration.zero);
-      if (widget.autoAdvance) {
+      if (_shouldPlay && widget.autoAdvance) {
         _imageTimer = Timer(widget.imageDisplayDuration, () => _playNext());
       }
     }
@@ -215,9 +218,14 @@ class _MediaPlayerState extends State<MediaPlayer> {
             _currentDuration = controller.value.duration;
             _currentPosition = controller.value.position;
           });
-          controller
-            ..setLooping(false)
-            ..play();
+          controller.setLooping(false);
+          if (_shouldPlay) {
+            controller.play();
+          } else {
+            controller
+              ..pause()
+              ..seekTo(Duration.zero);
+          }
           controller.addListener(_onVideoTick);
         })
         .catchError((error) {
@@ -239,7 +247,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
     final value = controller.value;
     if (value.isCompleted && !_advancing) {
       _advancing = true;
-      if (widget.autoAdvance) {
+      if (_shouldPlay && widget.autoAdvance) {
         _playNext();
       }
     }
