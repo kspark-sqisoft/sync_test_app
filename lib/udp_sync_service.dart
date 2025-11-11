@@ -35,11 +35,12 @@ class UdpSyncService {
       _localIpAddresses = await _resolveLocalIpAddresses();
     }
 
+    final allowReusePort = !Platform.isWindows;
     final socket = await RawDatagramSocket.bind(
       InternetAddress.anyIPv4,
       port,
       reuseAddress: true,
-      reusePort: true,
+      reusePort: allowReusePort,
     );
     socket.broadcastEnabled = true;
     _socket = socket;
@@ -66,11 +67,12 @@ class UdpSyncService {
 
     RawDatagramSocket? socket;
     try {
+      final allowReusePort = !Platform.isWindows;
       socket = await RawDatagramSocket.bind(
         InternetAddress.anyIPv4,
         0,
         reuseAddress: true,
-        reusePort: true,
+        reusePort: allowReusePort,
       );
       socket.broadcastEnabled = true;
       for (final target in targets) {
