@@ -58,6 +58,10 @@ class _MyHomePageState extends State<MyHomePage> {
   int _playbackSession = 0;
   StreamSubscription<bool>? _connectionSub;
   double _currentPlaybackSpeed = 1.0;
+  int? _lastSyncDiffMs;
+  bool _syncHealthy = true;
+  DateTime? _lastSyncUpdatedAt;
+  String _syncStatusMessage = '동기화 정보를 수신 대기중입니다.';
 
   static const int _tcpPort = 8989;
   static const int _udpSyncPort = 45455;
@@ -99,6 +103,10 @@ class _MyHomePageState extends State<MyHomePage> {
     final startTime = referenceTime ?? DateTime.now();
     _playbackSession++;
     _currentPlaybackSpeed = 1.0;
+    _lastSyncDiffMs = null;
+    _syncHealthy = true;
+    _syncStatusMessage = '동기화 정보를 수신 대기중입니다.';
+    _lastSyncUpdatedAt = null;
     setState(() {
       _scheduledDateTime = startTime;
       _showVideo = true;
@@ -128,6 +136,10 @@ class _MyHomePageState extends State<MyHomePage> {
     _udpBroadcastTimer = null;
     _udpSyncService?.stop();
     _currentPlaybackSpeed = 1.0;
+    _lastSyncDiffMs = null;
+    _syncHealthy = true;
+    _syncStatusMessage = '동기화 정보를 수신 대기중입니다.';
+    _lastSyncUpdatedAt = null;
     setState(() {
       _scheduledDateTime = null;
       _showVideo = false;
@@ -571,6 +583,11 @@ class _MyHomePageState extends State<MyHomePage> {
       debugPrint(
         '[UdpSync] Index mismatch: client=$clientIndex server=${data.mediaIndex}, jumping',
       );
+      _updateSyncStatus(
+        diffMs: 0,
+        healthy: false,
+        status: '미디어 인덱스 불일치 → ${data.mediaIndex} 번으로 이동합니다.',
+      );
       _mediaPlayerController.playAt(data.mediaIndex, fromRemote: true);
       return;
     }
@@ -583,6 +600,9 @@ class _MyHomePageState extends State<MyHomePage> {
     // 경과 시간 차이 계산
     final diff = serverElapsedAdjusted - clientElapsed;
     final absDiff = diff.abs();
+    debugPrint(
+      '[UdpSync] diff=${diff}ms (networkDelay=$networkDelay, server=${data.elapsedMs}, client=$clientElapsed)',
+    );
 
     // 큰 차이(500ms 이상)는 즉시 seekTo로 맞춤
     if (absDiff > 500) {
@@ -591,6 +611,11 @@ class _MyHomePageState extends State<MyHomePage> {
       );
       _mediaPlayerController.seekToMs(serverElapsedAdjusted);
       _currentPlaybackSpeed = 1.0;
+      _updateSyncStatus(
+        diffMs: diff,
+        healthy: false,
+        status: '큰 오차 감지 (Δ=${diff}ms) → 즉시 위치 조정',
+      );
       return;
     }
 
@@ -615,6 +640,12 @@ class _MyHomePageState extends State<MyHomePage> {
           '[UdpSync] Adjusting speed: ${targetSpeed.toStringAsFixed(3)}x (diff: ${diff}ms)',
         );
       }
+      _updateSyncStatus(
+        diffMs: diff,
+        healthy: absDiff <= 150,
+        status:
+            '속도 조절 중 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x)',
+      );
     } else {
       // 차이가 작으면 정상 속도로 복귀
       if (_currentPlaybackSpeed != 1.0) {
@@ -622,7 +653,117 @@ class _MyHomePageState extends State<MyHomePage> {
         _mediaPlayerController.adjustPlaybackSpeed(1.0);
         debugPrint('[UdpSync] Resetting speed to 1.0x');
       }
+      _updateSyncStatus(
+        diffMs: diff,
+        healthy: true,
+        status:
+            '안정 상태 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x)',
+      );
     }
+  }
+
+  void _updateSyncStatus({
+    required int diffMs,
+    required bool healthy,
+    required String status,
+  }) {
+    if (!mounted) return;
+    final now = DateTime.now();
+    final shouldUpdate =
+        healthy != _syncHealthy ||
+        _lastSyncDiffMs == null ||
+        (_lastSyncDiffMs! - diffMs).abs() > 15 ||
+        _lastSyncUpdatedAt == null ||
+        now.difference(_lastSyncUpdatedAt!).inMilliseconds >= 400 ||
+        _syncStatusMessage != status;
+    if (!shouldUpdate) {
+      return;
+    }
+    setState(() {
+      _syncHealthy = healthy;
+      _lastSyncDiffMs = diffMs;
+      _syncStatusMessage = status;
+      _lastSyncUpdatedAt = now;
+    });
+  }
+
+  Widget _buildSyncIndicator(BuildContext context) {
+    final healthy = _syncHealthy;
+    final color = healthy ? Colors.greenAccent : Colors.redAccent;
+    final diffText = _lastSyncDiffMs == null
+        ? 'N/A'
+        : '${_lastSyncDiffMs!.abs()} ms';
+
+    return SafeArea(
+      child: Align(
+        alignment: Alignment.topRight,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.6),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: healthy ? Colors.greenAccent : Colors.redAccent,
+                width: 1.5,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: color.withOpacity(0.7),
+                              blurRadius: 8,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        healthy ? '동기화 정상' : '동기화 조정 중',
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Δ $diffText',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _syncStatusMessage,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: Colors.white70),
+                    textAlign: TextAlign.right,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   String _formatSchedule(DateTime dateTime) {
@@ -639,15 +780,20 @@ class _MyHomePageState extends State<MyHomePage> {
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 300),
         child: _showVideo
-            ? MediaPlayer(
-                key: ValueKey('session_$_playbackSession'),
-                mediaList: _mediaList,
-                controller: _mediaPlayerController,
-                onAction: _handleMediaPlayerAction,
-                onExit: _handleMediaPlayerExit,
-                autoAdvance: _mode == AppMode.server,
-                initialIndex: _initialMediaIndex,
-                isActive: _showVideo,
+            ? Stack(
+                children: [
+                  MediaPlayer(
+                    key: ValueKey('session_$_playbackSession'),
+                    mediaList: _mediaList,
+                    controller: _mediaPlayerController,
+                    onAction: _handleMediaPlayerAction,
+                    onExit: _handleMediaPlayerExit,
+                    autoAdvance: _mode == AppMode.server,
+                    initialIndex: _initialMediaIndex,
+                    isActive: _showVideo,
+                  ),
+                  if (_mode == AppMode.client) _buildSyncIndicator(context),
+                ],
               )
             : Center(
                 child: Padding(
