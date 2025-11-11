@@ -563,9 +563,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _broadcastUdpSyncData() {
     if (_mode != AppMode.server || !_showVideo) return;
-    final index = _mediaPlayerController.currentIndex;
-    final elapsed = _mediaPlayerController.currentElapsedMs;
-    if (index == null || elapsed == null) return;
+    final index = _mediaPlayerController.currentIndex ?? _initialMediaIndex;
+    final elapsed =
+        _mediaPlayerController.currentElapsedMs ?? _estimatedElapsedMs();
     _udpSyncService?.broadcastSyncData(index, elapsed);
   }
 
@@ -660,6 +660,18 @@ class _MyHomePageState extends State<MyHomePage> {
             '안정 상태 (Δ=${diff}ms, 속도=${_currentPlaybackSpeed.toStringAsFixed(3)}x)',
       );
     }
+  }
+
+  int _estimatedElapsedMs() {
+    final scheduled = _scheduledDateTime;
+    if (scheduled == null) {
+      return 0;
+    }
+    final diff = DateTime.now().difference(scheduled).inMilliseconds;
+    if (diff.isNegative) {
+      return 0;
+    }
+    return diff;
   }
 
   void _updateSyncStatus({

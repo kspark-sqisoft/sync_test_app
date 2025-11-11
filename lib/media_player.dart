@@ -344,9 +344,13 @@ class _MediaPlayerState extends State<MediaPlayer> {
       }
       _currentPosition = startPosition;
     });
-    if (_currentDuration <= Duration.zero ||
-        _currentPosition >= _currentDuration) {
+    if (_currentDuration <= Duration.zero) {
       return;
+    }
+    if (_currentPosition >= _currentDuration) {
+      setState(() {
+        _currentPosition = Duration.zero;
+      });
     }
     const tick = Duration(milliseconds: 200);
     _progressTimer = Timer.periodic(tick, (_) {
