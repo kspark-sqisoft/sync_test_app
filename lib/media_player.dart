@@ -338,6 +338,10 @@ class _MediaPlayerState extends State<MediaPlayer> {
   void _startImageProgress(Duration startPosition) {
     _progressTimer?.cancel();
     setState(() {
+      if (_currentDuration <= Duration.zero ||
+          _currentDuration != widget.imageDisplayDuration) {
+        _currentDuration = widget.imageDisplayDuration;
+      }
       _currentPosition = startPosition;
     });
     if (_currentDuration <= Duration.zero ||
