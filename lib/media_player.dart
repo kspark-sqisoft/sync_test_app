@@ -60,6 +60,7 @@ class MediaPlayer extends StatefulWidget {
     required this.onExit,
     this.controller,
     this.onAction,
+    this.autoAdvance = true,
   });
 
   final List<String> mediaList;
@@ -67,6 +68,7 @@ class MediaPlayer extends StatefulWidget {
   final VoidCallback onExit;
   final MediaPlayerController? controller;
   final ValueChanged<MediaPlayerAction>? onAction;
+  final bool autoAdvance;
 
   @override
   State<MediaPlayer> createState() => _MediaPlayerState();
@@ -149,7 +151,9 @@ class _MediaPlayerState extends State<MediaPlayer> {
       _initializeAndPlayVideo(mediaPath);
     } else {
       _startImageProgress(Duration.zero);
-      _imageTimer = Timer(widget.imageDisplayDuration, () => _playNext());
+      if (widget.autoAdvance) {
+        _imageTimer = Timer(widget.imageDisplayDuration, () => _playNext());
+      }
     }
   }
 
@@ -195,7 +199,9 @@ class _MediaPlayerState extends State<MediaPlayer> {
     final value = controller.value;
     if (value.isCompleted && !_advancing) {
       _advancing = true;
-      _playNext();
+      if (widget.autoAdvance) {
+        _playNext();
+      }
     }
 
     final position = value.position;
@@ -305,7 +311,9 @@ class _MediaPlayerState extends State<MediaPlayer> {
         return;
       }
       _startImageProgress(clamped);
-      _imageTimer = Timer(remaining, () => _playNext());
+      if (widget.autoAdvance) {
+        _imageTimer = Timer(remaining, () => _playNext());
+      }
     }
   }
 

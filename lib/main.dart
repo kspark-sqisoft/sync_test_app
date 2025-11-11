@@ -340,6 +340,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 controller: _mediaPlayerController,
                 onAction: _handleMediaPlayerAction,
                 onExit: _handleMediaPlayerExit,
+                autoAdvance: _mode == AppMode.server,
               )
             : Center(
                 child: Padding(
