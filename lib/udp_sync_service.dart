@@ -92,6 +92,9 @@ class UdpSyncService {
       elapsedMs: elapsedMs,
       serverTimestampMs: serverTime,
     );
+    debugPrint(
+      '[UdpSyncService] broadcast index=$mediaIndex elapsed=${elapsedMs}ms ts=$serverTime',
+    );
     _sendBroadcast(data);
   }
 
@@ -102,6 +105,9 @@ class UdpSyncService {
     final bytes = utf8.encode(message);
     try {
       socket.send(bytes, InternetAddress('255.255.255.255'), port);
+      debugPrint(
+        '[UdpSyncService] -> 255.255.255.255:$port message=$message (${bytes.length} bytes)',
+      );
     } catch (error) {
       debugPrint('[UdpSyncService] Failed to send broadcast: $error');
     }
@@ -127,6 +133,10 @@ class UdpSyncService {
       final message = utf8.decode(dataBytes).trim();
       final data = MediaSyncData.decode(message);
       if (data != null) {
+        debugPrint(
+          '[UdpSyncService] <- ${d.address.address}:${d.port} '
+          'index=${data.mediaIndex} elapsed=${data.elapsedMs} ts=${data.serverTimestampMs}',
+        );
         onSyncData?.call(data);
       }
     }

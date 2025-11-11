@@ -566,6 +566,9 @@ class _MyHomePageState extends State<MyHomePage> {
     final index = _mediaPlayerController.currentIndex ?? _initialMediaIndex;
     final elapsed =
         _mediaPlayerController.currentElapsedMs ?? _estimatedElapsedMs();
+    debugPrint(
+      '[UDP] broadcast index=$index elapsed=${elapsed}ms session=$_playbackSession',
+    );
     _udpSyncService?.broadcastSyncData(index, elapsed);
   }
 
