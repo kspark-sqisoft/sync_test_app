@@ -343,32 +343,43 @@ class _MediaPlayerState extends State<MediaPlayer> {
 
   void _startImageProgress(Duration startPosition) {
     _progressTimer?.cancel();
+    final total = widget.imageDisplayDuration;
+    Duration clampedStart = startPosition;
+    if (clampedStart < Duration.zero) {
+      clampedStart = Duration.zero;
+    }
+    if (total > Duration.zero && clampedStart > total) {
+      clampedStart = total;
+    }
     setState(() {
-      if (_currentDuration <= Duration.zero ||
-          _currentDuration != widget.imageDisplayDuration) {
-        _currentDuration = widget.imageDisplayDuration;
-      }
-      _currentPosition = startPosition;
+      _currentDuration = total;
+      _currentPosition = clampedStart;
     });
-    if (_currentDuration <= Duration.zero) {
+    if (total <= Duration.zero) {
       return;
     }
-    if (_currentPosition >= _currentDuration) {
+    if (_currentPosition >= total) {
       setState(() {
-        _currentPosition = Duration.zero;
+        _currentPosition = total;
       });
+      _progressTimer?.cancel();
+      if (widget.autoAdvance && _shouldPlay) {
+        _imageTimer?.cancel();
+        _imageTimer = Timer(total, () => _playNext());
+      }
+      return;
     }
     const tick = Duration(milliseconds: 200);
     _progressTimer = Timer.periodic(tick, (_) {
       if (!mounted) return;
       setState(() {
         _currentPosition += tick;
-        if (_currentPosition >= _currentDuration) {
-          _currentPosition = _currentDuration;
+        if (_currentPosition >= total) {
+          _currentPosition = total;
           _progressTimer?.cancel();
           if (widget.autoAdvance && _shouldPlay) {
             _imageTimer?.cancel();
-            _imageTimer = Timer(widget.imageDisplayDuration, () => _playNext());
+            _imageTimer = Timer(total, () => _playNext());
           }
         }
       });
