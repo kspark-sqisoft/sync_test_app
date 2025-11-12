@@ -289,6 +289,9 @@ class _MediaPlayerState extends State<MediaPlayer> {
   }
 
   void _playNext({bool fromExternal = false}) {
+    if (!fromExternal && !widget.autoAdvance) {
+      return;
+    }
     if (!_hasMedia || !mounted) return;
     final nextIndex = (_currentIndex + 1) % widget.mediaList.length;
     _playMedia(nextIndex);
@@ -300,6 +303,9 @@ class _MediaPlayerState extends State<MediaPlayer> {
   }
 
   void _playPrevious({bool fromExternal = false}) {
+    if (!fromExternal && !widget.autoAdvance) {
+      return;
+    }
     if (!_hasMedia || !mounted) return;
     final total = widget.mediaList.length;
     final previousIndex = (_currentIndex - 1 + total) % total;
@@ -399,7 +405,9 @@ class _MediaPlayerState extends State<MediaPlayer> {
           _currentPosition = _currentDuration;
         });
         _progressTimer?.cancel();
-        _playNext();
+        if (widget.autoAdvance && _shouldPlay) {
+          _playNext();
+        }
         return;
       }
       _startImageProgress(clamped);
