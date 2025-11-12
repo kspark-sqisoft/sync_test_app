@@ -537,7 +537,8 @@ class _MediaPlayerState extends State<MediaPlayer> {
                 value: sliderValue,
                 min: 0,
                 max: sliderMax,
-                onChanged: totalMs <= 0
+                onChanged:
+                    totalMs <= 0 || (!_isCurrentVideo && !widget.autoAdvance)
                     ? null
                     : (double newValue) {
                         setState(() {
@@ -546,7 +547,8 @@ class _MediaPlayerState extends State<MediaPlayer> {
                           );
                         });
                       },
-                onChangeEnd: totalMs <= 0
+                onChangeEnd:
+                    totalMs <= 0 || (!_isCurrentVideo && !widget.autoAdvance)
                     ? null
                     : (double newValue) {
                         if (_isCurrentVideo) {
