@@ -502,7 +502,10 @@ class _MediaPlayerState extends State<MediaPlayer> {
   Widget _buildProgressOverlay(BuildContext context) {
     if (!_hasMedia) return const SizedBox.shrink();
 
-    final totalMs = _currentDuration.inMilliseconds;
+    final totalDuration = _isCurrentVideo
+        ? _currentDuration
+        : widget.imageDisplayDuration;
+    final totalMs = totalDuration.inMilliseconds;
     final sliderMax = totalMs > 0 ? totalMs.toDouble() : 1.0;
     final currentMs = _currentPosition.inMilliseconds;
     final sliderValue = totalMs > 0
@@ -546,7 +549,11 @@ class _MediaPlayerState extends State<MediaPlayer> {
                 onChangeEnd: totalMs <= 0
                     ? null
                     : (double newValue) {
-                        _seekTo(Duration(milliseconds: newValue.round()));
+                        if (_isCurrentVideo) {
+                          _seekTo(Duration(milliseconds: newValue.round()));
+                        } else {
+                          _seekTo(Duration(milliseconds: newValue.round()));
+                        }
                       },
               ),
             ),
@@ -554,7 +561,7 @@ class _MediaPlayerState extends State<MediaPlayer> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(_formatDuration(_currentPosition), style: textStyle),
-                Text(_formatDuration(_currentDuration), style: textStyle),
+                Text(_formatDuration(totalDuration), style: textStyle),
               ],
             ),
           ],
