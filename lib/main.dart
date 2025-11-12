@@ -32,6 +32,7 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   final List<String> _mediaList = [
+    'assets/video/video.mp4',
     'assets/video/video0.mp4',
     'assets/image/image0.jpg',
     'assets/video/video1.mp4',
