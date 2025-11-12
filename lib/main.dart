@@ -948,8 +948,8 @@ class _MyHomePageState extends State<MyHomePage> {
             ? Stack(
                 children: [
                   MediaPlayer(
-                    //key: ValueKey('session_$_playbackSession'),
-                    key: UniqueKey(),
+                    key: ValueKey('session_$_playbackSession'),
+
                     mediaList: _mediaList,
                     controller: _mediaPlayerController,
                     onAction: _handleMediaPlayerAction,
