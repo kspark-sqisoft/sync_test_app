@@ -196,17 +196,23 @@ class _MediaPlayerState extends State<MediaPlayer> {
     final mediaPath = widget.mediaList[normalized];
     final isVideo = _isVideoPath(mediaPath);
 
-    setState(() {
-      _currentIndex = normalized;
-      _currentMedia = mediaPath;
-      _advancing = false;
-      _currentPosition = Duration.zero;
-      _currentDuration = isVideo ? Duration.zero : widget.imageDisplayDuration;
-    });
-
     if (isVideo) {
+      setState(() {
+        _currentIndex = normalized;
+        _currentMedia = mediaPath;
+        _advancing = false;
+        _currentPosition = Duration.zero;
+        _currentDuration = Duration.zero;
+      });
       _initializeAndPlayVideo(mediaPath);
     } else {
+      setState(() {
+        _currentIndex = normalized;
+        _currentMedia = mediaPath;
+        _advancing = false;
+        _currentPosition = Duration.zero;
+        _currentDuration = widget.imageDisplayDuration;
+      });
       _startImageProgress(Duration.zero);
       if (_shouldPlay && widget.autoAdvance) {
         _imageTimer = Timer(widget.imageDisplayDuration, () => _playNext());
